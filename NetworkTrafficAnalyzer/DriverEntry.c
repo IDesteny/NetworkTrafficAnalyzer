@@ -11,7 +11,7 @@
 #define LINKNAME_STRING L"\\DosDevices\\NetworkTrafficAnalyzer"
 #define NTDEVICE_STRING L"\\Device\\NetworkTrafficAnalyzer"
 
-#define LOG(t, m) DbgPrint("%ws: %ws", t, m)
+#define LOG(t, m) DbgPrint("[%ws]: %ws", t, m)
 
 struct _FILTER_DEVICE_EXTENSION
 {
@@ -22,147 +22,60 @@ struct _FILTER_DEVICE_EXTENSION
 typedef struct _FILTER_DEVICE_EXTENSION FILTER_DEVICE_EXTENSION;
 typedef FILTER_DEVICE_EXTENSION *PFILTER_DEVICE_EXTENSION;
 
+NTSTATUS
+DriverEntry(
+	PDRIVER_OBJECT pDriverObject,
+	PUNICODE_STRING pRegistryPath);
+
+NTSTATUS
+DriverAccessControlRoutine(
+	PDEVICE_OBJECT pDeviceObject,
+	PIRP pIrp);
+
+NTSTATUS
+DeviceIoControlRoutine(
+	PDEVICE_OBJECT pDeviceObject,
+	PIRP pIrp);
+
+NDIS_STATUS
+RegisteringDevice(
+	NDIS_HANDLE hNdisFilterDriver);
+
 NDIS_STATUS
 FilterAttach(
 	NDIS_HANDLE NdisFilterHandle,
 	NDIS_HANDLE FilterDriverContext,
-	PNDIS_FILTER_ATTACH_PARAMETERS AttachParameters)
-{
-	UNREFERENCED_PARAMETER(NdisFilterHandle);
-	UNREFERENCED_PARAMETER(FilterDriverContext);
-	UNREFERENCED_PARAMETER(AttachParameters);
-
-	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
-	
-	return status;
-}
-
-VOID
-FilterDetach(
-	NDIS_HANDLE FilterModuleContext)
-{
-	UNREFERENCED_PARAMETER(FilterModuleContext);
-}
+	PNDIS_FILTER_ATTACH_PARAMETERS AttachParameters);
 
 NDIS_STATUS
 FilterRestart(
 	NDIS_HANDLE FilterModuleContext,
-	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters)
-{
-	UNREFERENCED_PARAMETER(FilterModuleContext);
-	UNREFERENCED_PARAMETER(RestartParameters);
-
-	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
-	
-	return status;
-}
+	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters);
 
 NDIS_STATUS
 FilterPause(
 	NDIS_HANDLE FilterModuleContext,
-	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters)
-{
-	UNREFERENCED_PARAMETER(FilterModuleContext);
-	UNREFERENCED_PARAMETER(PauseParameters);
-
-	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
-	
-	return status;
-}
+	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters);
 
 VOID
-NTADeregisterDevice(
-	NDIS_HANDLE hFilterDriver)
-{
-	NdisDeregisterDeviceEx(hFilterDriver);
-}
+FilterDetach(
+	NDIS_HANDLE FilterModuleContext);
 
 VOID
-FilterUnload(
-	PDRIVER_OBJECT pDriverObject)
-{
-	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = pDriverObject->DeviceObject->DeviceExtension;
+DeregisteringDevice(
+	NDIS_HANDLE hFilterDriver);
 
-	NTADeregisterDevice(pFilterDeviceExtension->hNdisDevice);
-	NdisFDeregisterFilterDriver(pFilterDeviceExtension->hFilterDriver);
-}
-
-NTSTATUS
-NTADispatch(
-	PDEVICE_OBJECT pDeviceObject,
-	PIRP pIrp)
-{
-	UNREFERENCED_PARAMETER(pDeviceObject);
-	NTSTATUS status = STATUS_SUCCESS;
-
-	pIrp->IoStatus.Status = status;
-	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
-
-	return status;
-}
-
-NDIS_STATUS
-NTARegisterDevice(
-	NDIS_HANDLE hNdisFilterDriver)
-{
-	PDRIVER_OBJECT pDriverObject;
-	PDEVICE_OBJECT pDeviceObject;
-
-	NDIS_STATUS status;
-	NDIS_HANDLE hNdisDevice;
-	
-	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension;
-
-	UNICODE_STRING DeviceName;
-	UNICODE_STRING DeviceLinkUnicodeString;
-
-	NdisInitUnicodeString(&DeviceLinkUnicodeString, LINKNAME_STRING);
-	NdisInitUnicodeString(&DeviceName, NTDEVICE_STRING);
-
-	PDRIVER_DISPATCH pDriverDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
-	NdisZeroMemory(&pDriverDispatch, sizeof(pDriverDispatch));
-
-	pDriverDispatch[IRP_MJ_CREATE] = NTADispatch;
-	pDriverDispatch[IRP_MJ_CLOSE] = NTADispatch;
-
-	NDIS_DEVICE_OBJECT_ATTRIBUTES pDeviceObjectAttributes;
-	NdisZeroMemory(&pDeviceObjectAttributes, sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES));
-
-	pDeviceObjectAttributes.Header.Revision = NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1;
-	pDeviceObjectAttributes.Header.Type = NDIS_OBJECT_TYPE_DEVICE_OBJECT_ATTRIBUTES;
-	pDeviceObjectAttributes.Header.Size = sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES);
-
-	pDeviceObjectAttributes.DeviceName = &DeviceName;
-	pDeviceObjectAttributes.SymbolicName = &DeviceLinkUnicodeString;
-	pDeviceObjectAttributes.MajorFunctions = pDriverDispatch;
-	pDeviceObjectAttributes.ExtensionSize = sizeof(FILTER_DEVICE_EXTENSION);
-
-	status = NdisRegisterDeviceEx(
-		hNdisFilterDriver,
-		&pDeviceObjectAttributes,
-		&pDeviceObject,
-		&hNdisDevice);
-
-	if (status != NDIS_STATUS_SUCCESS)
-	{
-		LOG(L"E", L"NdisRegisterDeviceEx");
-		return status;
-	}
-
-	pFilterDeviceExtension = NdisGetDeviceReservedExtension(pDeviceObject);
-	pFilterDeviceExtension->hFilterDriver = hNdisFilterDriver;
-	pFilterDeviceExtension->hNdisDevice = hNdisDevice;
-
-	pDriverObject = hNdisFilterDriver;
-
-	return status;
-}
+VOID
+DriverUnload(
+	PDRIVER_OBJECT pDriverObject);
 
 NTSTATUS
 DriverEntry(
 	PDRIVER_OBJECT pDriverObject,
 	PUNICODE_STRING pRegistryPath)
 {
+	LOG(L"I", L"DriverEntry()");
+
 	UNREFERENCED_PARAMETER(pRegistryPath);
 
 	NDIS_STATUS status;
@@ -197,7 +110,7 @@ DriverEntry(
 
 	hFilterDriverContext = pDriverObject;
 
-	pDriverObject->DriverUnload = FilterUnload;
+	pDriverObject->DriverUnload = DriverUnload;
 	
 	status = NdisFRegisterFilterDriver(
 		pDriverObject,
@@ -211,14 +124,182 @@ DriverEntry(
 		return status;
 	}
 
-	status = NTARegisterDevice(hNdisFilterDriver);
+	status = RegisteringDevice(hNdisFilterDriver);
 
 	if (status != NDIS_STATUS_SUCCESS)
 	{
-		LOG(L"E", L"NTARegisterDevice()");
+		LOG(L"E", L"RegisteringDevice()");
 		NdisFDeregisterFilterDriver(hNdisFilterDriver);
 		return status;
 	}
 
 	return status;
+}
+
+NTSTATUS
+DriverAccessControlRoutine(
+	PDEVICE_OBJECT pDeviceObject,
+	PIRP pIrp)
+{
+	LOG(L"I", L"DriverAccessControlRoutine()");
+
+	UNREFERENCED_PARAMETER(pDeviceObject);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	pIrp->IoStatus.Status = status;
+	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+
+	return status;
+}
+
+NTSTATUS
+DeviceIoControlRoutine(
+	PDEVICE_OBJECT pDeviceObject,
+	PIRP pIrp)
+{
+	LOG(L"I", L"DeviceIoControlRoutine()");
+
+	UNREFERENCED_PARAMETER(pDeviceObject);
+	NTSTATUS status = STATUS_SUCCESS;
+
+	pIrp->IoStatus.Status = status;
+	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+
+	return status;
+}
+
+NDIS_STATUS
+RegisteringDevice(
+	NDIS_HANDLE hNdisFilterDriver)
+{
+	LOG(L"I", L"RegisteringDevice()");
+
+	PDRIVER_OBJECT pDriverObject;
+	PDEVICE_OBJECT pDeviceObject;
+
+	NDIS_STATUS status;
+	NDIS_HANDLE hNdisDevice;
+
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension;
+
+	UNICODE_STRING DeviceName;
+	UNICODE_STRING DeviceLinkUnicodeString;
+
+	NdisInitUnicodeString(&DeviceLinkUnicodeString, LINKNAME_STRING);
+	NdisInitUnicodeString(&DeviceName, NTDEVICE_STRING);
+
+	PDRIVER_DISPATCH pDriverDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
+	NdisZeroMemory(&pDriverDispatch, sizeof(pDriverDispatch));
+
+	pDriverDispatch[IRP_MJ_DEVICE_CONTROL] = DeviceIoControlRoutine;
+	pDriverDispatch[IRP_MJ_CREATE] = DriverAccessControlRoutine;
+	pDriverDispatch[IRP_MJ_CLOSE] = DriverAccessControlRoutine;
+
+	NDIS_DEVICE_OBJECT_ATTRIBUTES pDeviceObjectAttributes;
+	NdisZeroMemory(&pDeviceObjectAttributes, sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES));
+
+	pDeviceObjectAttributes.Header.Revision = NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1;
+	pDeviceObjectAttributes.Header.Type = NDIS_OBJECT_TYPE_DEVICE_OBJECT_ATTRIBUTES;
+	pDeviceObjectAttributes.Header.Size = sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES);
+
+	pDeviceObjectAttributes.DeviceName = &DeviceName;
+	pDeviceObjectAttributes.SymbolicName = &DeviceLinkUnicodeString;
+	pDeviceObjectAttributes.MajorFunctions = pDriverDispatch;
+	pDeviceObjectAttributes.ExtensionSize = sizeof(FILTER_DEVICE_EXTENSION);
+
+	status = NdisRegisterDeviceEx(
+		hNdisFilterDriver,
+		&pDeviceObjectAttributes,
+		&pDeviceObject,
+		&hNdisDevice);
+
+	if (status != NDIS_STATUS_SUCCESS)
+	{
+		LOG(L"E", L"NdisRegisterDeviceEx");
+		return status;
+	}
+
+	pFilterDeviceExtension = NdisGetDeviceReservedExtension(pDeviceObject);
+	pFilterDeviceExtension->hFilterDriver = hNdisFilterDriver;
+	pFilterDeviceExtension->hNdisDevice = hNdisDevice;
+
+	//TODO: Why?
+	pDriverObject = hNdisFilterDriver;
+
+	return status;
+}
+
+NDIS_STATUS
+FilterAttach(
+	NDIS_HANDLE NdisFilterHandle,
+	NDIS_HANDLE FilterDriverContext,
+	PNDIS_FILTER_ATTACH_PARAMETERS AttachParameters)
+{
+	LOG(L"I", L"FilterAttach()");
+
+	UNREFERENCED_PARAMETER(NdisFilterHandle);
+	UNREFERENCED_PARAMETER(FilterDriverContext);
+	UNREFERENCED_PARAMETER(AttachParameters);
+
+	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+	return status;
+}
+
+NDIS_STATUS
+FilterRestart(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters)
+{
+	LOG(L"I", L"FilterRestart()");
+
+	UNREFERENCED_PARAMETER(FilterModuleContext);
+	UNREFERENCED_PARAMETER(RestartParameters);
+
+	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+	return status;
+}
+
+NDIS_STATUS
+FilterPause(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters)
+{
+	LOG(L"I", L"FilterPause()");
+
+	UNREFERENCED_PARAMETER(FilterModuleContext);
+	UNREFERENCED_PARAMETER(PauseParameters);
+
+	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+	return status;
+}
+
+VOID
+FilterDetach(
+	NDIS_HANDLE FilterModuleContext)
+{
+	LOG(L"I", L"FilterDetach()");
+
+	UNREFERENCED_PARAMETER(FilterModuleContext);
+}
+
+VOID
+DeregisteringDevice(
+	NDIS_HANDLE hFilterDriver)
+{
+	LOG(L"I", L"DeregisteringDevice()");
+
+	NdisDeregisterDeviceEx(hFilterDriver);
+}
+
+VOID
+DriverUnload(
+	PDRIVER_OBJECT pDriverObject)
+{
+	LOG(L"I", L"DriverUnload()");
+
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension 
+		= pDriverObject->DeviceObject->DeviceExtension;
+
+	DeregisteringDevice(pFilterDeviceExtension->hNdisDevice);
+	NdisFDeregisterFilterDriver(pFilterDeviceExtension->hFilterDriver);
 }
