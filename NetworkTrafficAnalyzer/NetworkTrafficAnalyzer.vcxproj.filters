@@ -3,4 +3,7 @@
   <ItemGroup>
     <ClCompile Include="DriverEntry.c" />
   </ItemGroup>
+  <ItemGroup>
+    <Inf Include="NetworkTrafficAnalyzer.inf" />
+  </ItemGroup>
 </Project>

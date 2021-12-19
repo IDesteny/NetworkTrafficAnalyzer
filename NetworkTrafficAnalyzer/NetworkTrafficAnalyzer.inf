@@ -1,0 +1,89 @@
+[version]
+Signature="$Windows NT$"
+Class=NetService
+ClassGUID={4D36E974-E325-11CE-BFC1-08002BE10318}
+Provider=%Msft%
+CatalogFile=NetworkTrafficAnalyzer.cat
+PnpLockdown=1
+
+[Manufacturer]
+%Msft%=MSFT, NTx86, NTia64, NTamd64, NTarm, NTarm64
+
+[MSFT.NTx86]
+%NetworkTrafficAnalyzer_Desc%=Install, MS_NetworkTrafficAnalyzer
+
+[MSFT.NTia64]
+%NetworkTrafficAnalyzer_Desc%=Install, MS_NetworkTrafficAnalyzer
+
+[MSFT.NTamd64]
+%NetworkTrafficAnalyzer_Desc%=Install, MS_NetworkTrafficAnalyzer
+
+[MSFT.NTarm64]
+%NetworkTrafficAnalyzer_Desc%=Install, MS_NetworkTrafficAnalyzer
+
+[MSFT.NTarm]
+%NetworkTrafficAnalyzer_Desc%=Install, MS_NetworkTrafficAnalyzer
+
+[Install]
+AddReg=Inst_Ndi
+Characteristics=0x40000
+NetCfgInstanceId=%InstanceId%
+Copyfiles=NetworkTrafficAnalyzer.copyfiles.sys
+
+[SourceDisksNames]
+1=%NetworkTrafficAnalyzer_Desc%, "",,
+
+[SourceDisksFiles]
+NetworkTrafficAnalyzer.sys=1
+
+[DestinationDirs]
+DefaultDestDir=12
+NetworkTrafficAnalyzer.copyfiles.sys=12
+
+[NetworkTrafficAnalyzer.copyfiles.sys]
+NetworkTrafficAnalyzer.sys,,, 2
+
+[Inst_Ndi]
+HKR, Ndi, Service,, %DrvName%
+HKR, Ndi, CoServices, 0x00010000,%DrvName%
+HKR, Ndi, HelpText,, %NetworkTrafficAnalyzer_HelpText%
+HKR, Ndi, FilterClass,, compression
+HKR, Ndi, FilterType, 0x00010001, 2
+HKR, Ndi\Interfaces, UpperRange,, "noupper"
+HKR, Ndi\Interfaces, LowerRange,, "nolower"
+HKR, Ndi\Interfaces, FilterMediaTypes,, "ethernet, wan, ppip"
+HKR, Ndi ,FilterRunType, 0x00010001, 1
+
+[Install.Services]
+AddService=NetworkTrafficAnalyzer,,NetworkTrafficAnalyzer_Service_Inst
+
+[NetworkTrafficAnalyzer_Service_Inst]
+DisplayName=%NetworkTrafficAnalyzer_Desc%
+ServiceType=1
+StartType=1
+ErrorControl=1
+ServiceBinary=%12%\NetworkTrafficAnalyzer.sys
+LoadOrderGroup=NDIS
+Description=%NetworkTrafficAnalyzer_Desc%
+AddReg=Common.Params.reg, NdisImPlatformBindingOptions.reg
+
+[Install.Remove.Services]
+DelService=NetworkTrafficAnalyzer,0x200
+
+[Common.Params.reg]
+HKR, FilterDriverParams\DriverParam, ParamDesc,, "Driverparam for lwf"
+HKR, FilterDriverParams\DriverParam, default,, "5"
+HKR, FilterDriverParams\DriverParam, type,, "int"
+HKR, FilterAdapterParams\AdapterParam, ParamDesc,, "Adapterparam for lwf"
+HKR, FilterAdapterParams\AdapterParam, default,, "10"
+HKR, FilterAdapterParams\AdapterParam, type,, "int"
+
+[NdisImPlatformBindingOptions.reg]
+HKR, Parameters, NdisImPlatformBindingOptions, 0x00010001, 0
+
+[Strings]
+Msft="IDesteny"
+NetworkTrafficAnalyzer_Desc="NetworkTrafficAnalyzer NDIS LightWeight Filter"
+NetworkTrafficAnalyzer_HelpText="NetworkTrafficAnalyzer NDIS LightWeight Filter"
+InstanceId="{009f4c24-6c17-43ad-885f-ed6cb50e8d5a}"
+DrvName="NetworkTrafficAnalyzer"
