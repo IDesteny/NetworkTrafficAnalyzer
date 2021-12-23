@@ -1,3 +1,9 @@
+/*
+* Tasks:
+* - Get rid of global variables
+* - Save unique IP addresses
+*/
+
 #define NDIS630
 #include <ndis.h>
 #include <stdarg.h>
@@ -399,7 +405,6 @@ FilterRestart(
 	return status;
 }
 
-
 VOID
 FilterReceiveNetBufferLists(
 	NDIS_HANDLE FilterModuleContext,
@@ -513,5 +518,5 @@ DriverUnload(
 	DeregisteringDevice(hNdisDevice);
 	NdisFDeregisterFilterDriver(hNdisFilterDriver);
 
-	DEBUGP(DL_TRACE, "==> DriverUnload");
+	DEBUGP(DL_TRACE, "<== DriverUnload");
 }
