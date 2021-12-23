@@ -24,7 +24,7 @@
 #define DL_WARN	1
 #define DL_ERROR	0
 
-#define DEBUG_LVL	3
+#define DEBUG_LVL DL_INFO
 
 VOID
 DbgPrintExWithPrefix(
@@ -57,7 +57,43 @@ DbgPrintExWithPrefix(
 #define NDIS_SUCCESS(status) \
 	NT_SUCCESS(status)
 
-LIST_ENTRY filterModuleList;
+#define ETH_ALEN 6
+#define ETH_TYPE_IP 0x0800
+
+#define ntohs(x) \
+	((((x) & 0x00ff) << 8) | (((x) & 0xff00) >> 8))
+
+#define NB_SIZE \
+	sizeof(ETH_HEADER) + sizeof(IP_HEADER)
+
+struct _ETH_HEADER
+{
+	UCHAR h_dest[ETH_ALEN];
+	UCHAR h_source[ETH_ALEN];
+	UCHAR h_proto;
+};
+
+typedef struct _ETH_HEADER ETH_HEADER;
+typedef ETH_HEADER *PETH_HEADER;
+
+struct _IP_HEADER
+{
+	UCHAR ip_hl : 4;
+	UCHAR ip_v : 4;
+	UCHAR ip_tos;
+	SHORT ip_len;
+	UCHAR ip_id;
+	SHORT ip_off;
+	UCHAR ip_ttl;
+	UCHAR ip_p;
+	USHORT ip_sum;
+	UINT ip_src;
+	UINT ip_dst;
+};
+
+typedef struct _IP_HEADER IP_HEADER;
+typedef IP_HEADER *PIP_HEADER;
+
 NDIS_HANDLE hNdisFilterDriver;
 NDIS_HANDLE hNdisFilterDevice;
 NDIS_HANDLE hNdisDevice;
@@ -162,29 +198,28 @@ DriverEntry(
 	filterDriverCharacteristics.PauseHandler = FilterPause;
 
 	pDriverObject->DriverUnload = DriverUnload;
-	
-	InitializeListHead(&filterModuleList);
 
-	status = NdisFRegisterFilterDriver(
-		pDriverObject,
-		pDriverObject,
-		&filterDriverCharacteristics,
-		&hNdisFilterDriver);
-
-	if (!NDIS_SUCCESS(status))
+	do
 	{
-		DEBUGP(DL_ERROR, "NdisFRegisterFilterDriver function completed with error - status: %i", status);
-		return status;
-	}
+		status = NdisFRegisterFilterDriver(
+			pDriverObject,
+			NULL,
+			&filterDriverCharacteristics,
+			&hNdisFilterDriver);
 
-	status = RegisteringDevice();
+		if (status != NDIS_STATUS_SUCCESS)
+		{
+			break;
+		}
 
-	if (!NDIS_SUCCESS(status))
-	{
-		DEBUGP(DL_ERROR, "RegisteringDevice function completed with error - status: %i", status);
-		NdisFDeregisterFilterDriver(hNdisFilterDriver);
-		return status;
-	}
+		status = RegisteringDevice();
+
+		if (status != NDIS_STATUS_SUCCESS)
+		{
+			NdisFDeregisterFilterDriver(hNdisFilterDriver);
+			break;
+		}
+	} while (FALSE);
 
 	DEBUGP(DL_TRACE, "<== DriverEntry - status: %i", status);
 	return status;
@@ -301,17 +336,19 @@ RegisteringDevice(
 	pDeviceObjectAttributes.SymbolicName = &deviceLinkUnicodeString;
 	pDeviceObjectAttributes.MajorFunctions = pDriverDispatch;
 
-	status = NdisRegisterDeviceEx(
-		hNdisFilterDriver,
-		&pDeviceObjectAttributes,
-		&pDeviceObject,
-		&hNdisDevice);
-
-	if (!NDIS_SUCCESS(status))
+	do
 	{
-		DEBUGP(DL_ERROR, "NdisRegisterDeviceEx function completed with error - status: %i", status);
-		return status;
-	}
+		status = NdisRegisterDeviceEx(
+			hNdisFilterDriver,
+			&pDeviceObjectAttributes,
+			&pDeviceObject,
+			&hNdisDevice);
+
+		if (status != NDIS_STATUS_SUCCESS)
+		{
+			break;
+		}
+	} while (FALSE);
 	
 	DEBUGP(DL_TRACE, "<== RegisteringDevice - status: %i", status);
 	return status;
@@ -329,18 +366,19 @@ FilterAttach(
 
 	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
 
-	if (AttachParameters->MiniportMediaType != NdisMedium802_3
-		&& AttachParameters->MiniportMediaType != NdisMediumWan
-		&& AttachParameters->MiniportMediaType != NdisMediumWirelessWan)
+	do
 	{
-		status = NDIS_STATUS_INVALID_PARAMETER;
+		if (AttachParameters->MiniportMediaType != NdisMedium802_3
+			&& AttachParameters->MiniportMediaType != NdisMediumWan
+			&& AttachParameters->MiniportMediaType != NdisMediumWirelessWan)
+		{
+			status = NDIS_STATUS_INVALID_PARAMETER;
+			break;
+		}
 
-		DEBUGP(DL_ERROR, "<== FilterAttach function completed with error - status: %i", status);
-		return status;
-	}
-
-	hNdisFilterDevice = NdisFilterHandle;
-
+		hNdisFilterDevice = NdisFilterHandle;
+	} while (FALSE);
+	
 	DEBUGP(DL_TRACE, "<== FilterAttach - status: %i", status);
 	return status;
 }
@@ -361,6 +399,7 @@ FilterRestart(
 	return status;
 }
 
+
 VOID
 FilterReceiveNetBufferLists(
 	NDIS_HANDLE FilterModuleContext,
@@ -372,6 +411,48 @@ FilterReceiveNetBufferLists(
 	DEBUGP(DL_TRACE, "==> FilterReceiveNetBufferLists");
 
 	UNREFERENCED_PARAMETER(FilterModuleContext);
+
+	PUCHAR HeaderBuffer;
+	PIP_HEADER IpHeader;
+	PETH_HEADER EthHeader;
+	UCHAR LocalBuffer[NB_SIZE];
+
+	for (
+		PNET_BUFFER_LIST NetBufferList = NetBufferLists; 
+		NetBufferList; 
+		NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
+	{
+		for (
+			PNET_BUFFER NetBuffer = NET_BUFFER_LIST_FIRST_NB(NetBufferList);
+			NetBuffer;
+			NetBuffer = NET_BUFFER_NEXT_NB(NetBuffer))
+		{
+			HeaderBuffer = NdisGetDataBuffer(NetBuffer, NB_SIZE, LocalBuffer, 1, 1);
+
+			if (!HeaderBuffer)
+			{
+				continue;
+			}
+
+			EthHeader = (PETH_HEADER)HeaderBuffer;
+
+			if (ntohs(EthHeader->h_proto) != ETH_TYPE_IP)
+			{
+				continue;
+			}
+
+			IpHeader = (PIP_HEADER)((ULONG_PTR)EthHeader + sizeof(ETH_HEADER));
+
+			if (IpHeader->ip_p != IPPROTO_ICMP)
+			{
+				continue;
+			}
+
+			DEBUGP(DL_INFO, "IP - %u.%u.%u.%u < %u.%u.%u.%u",
+				((PUCHAR)(&IpHeader->ip_dst))[0], ((PUCHAR)(&IpHeader->ip_dst))[1], ((PUCHAR)(&IpHeader->ip_dst))[2], ((PUCHAR)(&IpHeader->ip_dst))[3],
+				((PUCHAR)(&IpHeader->ip_src))[0], ((PUCHAR)(&IpHeader->ip_src))[1], ((PUCHAR)(&IpHeader->ip_src))[2], ((PUCHAR)(&IpHeader->ip_src))[3]);
+		}
+	}
 
 	NdisFIndicateReceiveNetBufferLists(
 		hNdisFilterDevice,
