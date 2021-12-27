@@ -1,7 +1,6 @@
 /*
 * Tasks:
 * - Get rid of global variables
-* - Save unique IP addresses
 */
 
 #define NDIS630
@@ -60,9 +59,6 @@ DbgPrintExWithPrefix(
 
 #endif // DBG
 
-#define NDIS_SUCCESS(status) \
-	NT_SUCCESS(status)
-
 #define ETH_ALEN 6
 #define ETH_TYPE_IP 0x0800
 
@@ -100,8 +96,17 @@ struct _IP_HEADER
 typedef struct _IP_HEADER IP_HEADER;
 typedef IP_HEADER *PIP_HEADER;
 
+struct _FILTER_DEVICE_EXTENSION
+{
+	NDIS_HANDLE hNdisFilterDevice;
+	UINT ipAddresses[128];
+	INT numberOfAddresses;
+};
+
+typedef struct _FILTER_DEVICE_EXTENSION FILTER_DEVICE_EXTENSION;
+typedef FILTER_DEVICE_EXTENSION* PFILTER_DEVICE_EXTENSION;
+
 NDIS_HANDLE hNdisFilterDriver;
-NDIS_HANDLE hNdisFilterDevice;
 NDIS_HANDLE hNdisDevice;
 
 NTSTATUS
@@ -381,8 +386,39 @@ FilterAttach(
 			status = NDIS_STATUS_INVALID_PARAMETER;
 			break;
 		}
+		
+		PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = NdisAllocateMemoryWithTagPriority(
+			NdisFilterHandle,
+			sizeof(FILTER_DEVICE_EXTENSION),
+			'NTA',
+			LowPoolPriority);
 
-		hNdisFilterDevice = NdisFilterHandle;
+		if (!pFilterDeviceExtension)
+		{
+			status = STATUS_BUFFER_ALL_ZEROS;
+			break;
+		}
+
+		pFilterDeviceExtension->hNdisFilterDevice = NdisFilterHandle;
+
+		NDIS_FILTER_ATTRIBUTES filterAttributes;
+		NdisZeroMemory(&filterAttributes, sizeof(NDIS_FILTER_ATTRIBUTES));
+
+		filterAttributes.Header.Revision = NDIS_FILTER_ATTRIBUTES_REVISION_1;
+		filterAttributes.Header.Size = sizeof(NDIS_FILTER_ATTRIBUTES);
+		filterAttributes.Header.Type = NDIS_OBJECT_TYPE_FILTER_ATTRIBUTES;
+		filterAttributes.Flags = 0;
+
+		status = NdisFSetAttributes(
+			NdisFilterHandle,
+			pFilterDeviceExtension,
+			&filterAttributes);
+
+		if (status != NDIS_STATUS_SUCCESS)
+		{
+			break;
+		}
+
 	} while (FALSE);
 	
 	DEBUGP(DL_TRACE, "<== FilterAttach - status: %i", status);
@@ -405,6 +441,23 @@ FilterRestart(
 	return status;
 }
 
+BOOLEAN
+Find(
+	PUINT ips,
+	INT size,
+	UINT newIp)
+{
+	for (INT i = 0; i < size; ++i)
+	{
+		if (ips[i] == newIp)
+		{
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
 VOID
 FilterReceiveNetBufferLists(
 	NDIS_HANDLE FilterModuleContext,
@@ -417,50 +470,67 @@ FilterReceiveNetBufferLists(
 
 	UNREFERENCED_PARAMETER(FilterModuleContext);
 
-	PUCHAR HeaderBuffer;
-	PIP_HEADER IpHeader;
-	PETH_HEADER EthHeader;
-	UCHAR LocalBuffer[NB_SIZE];
+	PUCHAR headerBuffer;
+	PIP_HEADER ipHeader;
+	PETH_HEADER ethHeader;
+	UCHAR localBuffer[NB_SIZE];
+
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = FilterModuleContext;
+	INT numberOfAddresses = pFilterDeviceExtension->numberOfAddresses;
+	PUINT ipAddresses = pFilterDeviceExtension->ipAddresses;
 
 	for (
-		PNET_BUFFER_LIST NetBufferList = NetBufferLists; 
-		NetBufferList; 
-		NetBufferList = NET_BUFFER_LIST_NEXT_NBL(NetBufferList))
+		PNET_BUFFER_LIST netBufferList = NetBufferLists; 
+		netBufferList; 
+		netBufferList = NET_BUFFER_LIST_NEXT_NBL(netBufferList))
 	{
 		for (
-			PNET_BUFFER NetBuffer = NET_BUFFER_LIST_FIRST_NB(NetBufferList);
-			NetBuffer;
-			NetBuffer = NET_BUFFER_NEXT_NB(NetBuffer))
+			PNET_BUFFER netBuffer = NET_BUFFER_LIST_FIRST_NB(netBufferList);
+			netBuffer;
+			netBuffer = NET_BUFFER_NEXT_NB(netBuffer))
 		{
-			HeaderBuffer = NdisGetDataBuffer(NetBuffer, NB_SIZE, LocalBuffer, 1, 1);
+			headerBuffer = NdisGetDataBuffer(netBuffer, NB_SIZE, localBuffer, 1, 1);
 
-			if (!HeaderBuffer)
+			if (!headerBuffer)
 			{
 				continue;
 			}
 
-			EthHeader = (PETH_HEADER)HeaderBuffer;
+			ethHeader = (PETH_HEADER)headerBuffer;
 
-			if (ntohs(EthHeader->h_proto) != ETH_TYPE_IP)
+			if (ntohs(ethHeader->h_proto) != ETH_TYPE_IP)
 			{
 				continue;
 			}
 
-			IpHeader = (PIP_HEADER)((ULONG_PTR)EthHeader + sizeof(ETH_HEADER));
+			ipHeader = (PIP_HEADER)((ULONG_PTR)ethHeader + sizeof(ETH_HEADER));
 
-			if (IpHeader->ip_p != IPPROTO_ICMP)
+			if (ipHeader->ip_p != IPPROTO_ICMP)
 			{
 				continue;
 			}
 
-			DEBUGP(DL_INFO, "IP - %u.%u.%u.%u < %u.%u.%u.%u",
-				((PUCHAR)(&IpHeader->ip_dst))[0], ((PUCHAR)(&IpHeader->ip_dst))[1], ((PUCHAR)(&IpHeader->ip_dst))[2], ((PUCHAR)(&IpHeader->ip_dst))[3],
-				((PUCHAR)(&IpHeader->ip_src))[0], ((PUCHAR)(&IpHeader->ip_src))[1], ((PUCHAR)(&IpHeader->ip_src))[2], ((PUCHAR)(&IpHeader->ip_src))[3]);
+			if (!Find(ipAddresses, numberOfAddresses, ipHeader->ip_dst))
+			{
+				ipAddresses[numberOfAddresses++] = ipHeader->ip_dst;
+			}
+
+			if (!Find(ipAddresses, numberOfAddresses, ipHeader->ip_src))
+			{
+				ipAddresses[numberOfAddresses++] = ipHeader->ip_src;
+			}
+
+			PUINT8 ipDst = (PUINT8)&ipHeader->ip_dst;
+			PUINT8 ipSrc = (PUINT8)&ipHeader->ip_src;
+
+			DEBUGP(DL_INFO, "IP - %hhu.%hhu.%hhu.%hhu < %hhu.%hhu.%hhu.%hhu",
+				ipDst[0], ipDst[1], ipDst[2], ipDst[3],
+				ipSrc[0], ipSrc[1], ipSrc[2], ipSrc[3]);
 		}
 	}
 
 	NdisFIndicateReceiveNetBufferLists(
-		hNdisFilterDevice,
+		pFilterDeviceExtension->hNdisFilterDevice,
 		NetBufferLists,
 		PortNumber,
 		NumberOfNetBufferLists,
