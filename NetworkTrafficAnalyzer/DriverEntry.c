@@ -373,8 +373,6 @@ FilterAttach(
 {
 	DEBUGP(DL_TRACE, "==> FilterAttach");
 
-	UNREFERENCED_PARAMETER(FilterDriverContext);
-
 	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
 
 	do
@@ -407,7 +405,6 @@ FilterAttach(
 		filterAttributes.Header.Revision = NDIS_FILTER_ATTRIBUTES_REVISION_1;
 		filterAttributes.Header.Size = sizeof(NDIS_FILTER_ATTRIBUTES);
 		filterAttributes.Header.Type = NDIS_OBJECT_TYPE_FILTER_ATTRIBUTES;
-		filterAttributes.Flags = 0;
 
 		status = NdisFSetAttributes(
 			NdisFilterHandle,
@@ -442,7 +439,7 @@ FilterRestart(
 }
 
 BOOLEAN
-Find(
+CheckForUniq(
 	PUINT ips,
 	INT size,
 	UINT newIp)
@@ -468,8 +465,6 @@ FilterReceiveNetBufferLists(
 {
 	DEBUGP(DL_TRACE, "==> FilterReceiveNetBufferLists");
 
-	UNREFERENCED_PARAMETER(FilterModuleContext);
-
 	PUCHAR headerBuffer;
 	PIP_HEADER ipHeader;
 	PETH_HEADER ethHeader;
@@ -478,6 +473,9 @@ FilterReceiveNetBufferLists(
 	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = FilterModuleContext;
 	INT numberOfAddresses = pFilterDeviceExtension->numberOfAddresses;
 	PUINT ipAddresses = pFilterDeviceExtension->ipAddresses;
+
+	PUINT8 ipDst;
+	PUINT8 ipSrc;
 
 	for (
 		PNET_BUFFER_LIST netBufferList = NetBufferLists; 
@@ -510,18 +508,18 @@ FilterReceiveNetBufferLists(
 				continue;
 			}
 
-			if (!Find(ipAddresses, numberOfAddresses, ipHeader->ip_dst))
+			if (!CheckForUniq(ipAddresses, numberOfAddresses, ipHeader->ip_dst))
 			{
 				ipAddresses[numberOfAddresses++] = ipHeader->ip_dst;
 			}
 
-			if (!Find(ipAddresses, numberOfAddresses, ipHeader->ip_src))
+			if (!CheckForUniq(ipAddresses, numberOfAddresses, ipHeader->ip_src))
 			{
 				ipAddresses[numberOfAddresses++] = ipHeader->ip_src;
 			}
 
-			PUINT8 ipDst = (PUINT8)&ipHeader->ip_dst;
-			PUINT8 ipSrc = (PUINT8)&ipHeader->ip_src;
+			ipDst = (PUINT8)&ipHeader->ip_dst;
+			ipSrc = (PUINT8)&ipHeader->ip_src;
 
 			DEBUGP(DL_INFO, "IP - %hhu.%hhu.%hhu.%hhu < %hhu.%hhu.%hhu.%hhu",
 				ipDst[0], ipDst[1], ipDst[2], ipDst[3],
