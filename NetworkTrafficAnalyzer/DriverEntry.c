@@ -1,6 +1,7 @@
 /*
-* Tasks:
-* - Get rid of global variables
+* - Add read request processing
+* - Add comments
+* - CLeanup
 */
 
 #define NDIS630
@@ -22,6 +23,14 @@
 #define NTDEVICE_STRING \
 	L"\\Device\\" FILTER_SERVICE_NAME
 
+#define FILTER_TAG \
+	'NTA'
+
+#define FILTER_MAJOR_NDIS_VERSION 6
+#define FILTER_MINOR_NDIS_VERSION 30
+
+#define FILTER_MAJOR_DRIVER_VERSION 1
+
 #ifdef DBG
 
 #define DL_INFO	3
@@ -29,7 +38,7 @@
 #define DL_WARN	1
 #define DL_ERROR	0
 
-#define DEBUG_LVL DL_INFO
+#define DEBUG_LVL DL_WARN
 
 VOID
 DbgPrintExWithPrefix(
@@ -45,12 +54,17 @@ DbgPrintExWithPrefix(
 	va_end(arglist);
 }
 
-#define DEBUGP(lvl, ...)													\
-{																	\
-	if ((lvl) <= DEBUG_LVL)												\
-	{																\
-		DbgPrintExWithPrefix("NTA: ", DPFLTR_IHVNETWORK_ID, lvl, __VA_ARGS__);	\
-	}																\
+#pragma warning(disable: 4127)
+
+#define DEBUGP(lvl, ...)				\
+{								\
+	if ((lvl) <= DEBUG_LVL)			\
+	{							\
+		DbgPrintExWithPrefix("NTA: ",	\
+			DPFLTR_IHVNETWORK_ID,	\
+			lvl,					\
+			__VA_ARGS__);			\
+	}							\
 }
 
 #else // DBG
@@ -63,20 +77,21 @@ DbgPrintExWithPrefix(
 #define ETH_TYPE_IP 0x0800
 
 #define ntohs(x) \
-	((((x) & 0x00ff) << 8) | (((x) & 0xff00) >> 8))
+	((((x) & 0x00ff) << 8) | \
+	(((x) & 0xff00) >> 8))
 
-#define NB_SIZE \
-	sizeof(ETH_HEADER) + sizeof(IP_HEADER)
+#define NORMALIZATION_OF_ADDRESS(ip) \
+	(PUINT8)&(ip);
+
+#define SIZE_OF_ADDRESS_ARRAY 128
+
 
 struct _ETH_HEADER
 {
 	UCHAR h_dest[ETH_ALEN];
 	UCHAR h_source[ETH_ALEN];
-	UCHAR h_proto;
+	USHORT h_proto;
 };
-
-typedef struct _ETH_HEADER ETH_HEADER;
-typedef ETH_HEADER *PETH_HEADER;
 
 struct _IP_HEADER
 {
@@ -84,7 +99,7 @@ struct _IP_HEADER
 	UCHAR ip_v : 4;
 	UCHAR ip_tos;
 	SHORT ip_len;
-	UCHAR ip_id;
+	USHORT ip_id;
 	SHORT ip_off;
 	UCHAR ip_ttl;
 	UCHAR ip_p;
@@ -93,82 +108,88 @@ struct _IP_HEADER
 	UINT ip_dst;
 };
 
-typedef struct _IP_HEADER IP_HEADER;
-typedef IP_HEADER *PIP_HEADER;
+struct _IP_ADDRESS
+{
+	UINT dst;
+	UINT src;
+};
+
+struct _FILTER_EXTENSION
+{
+	NDIS_HANDLE hNdisFilterDevice;
+	UINT arrayOfAddresses[SIZE_OF_ADDRESS_ARRAY];
+	INT numberOfUniqueAddresses;
+	INT numberOfFilteredPackets;
+};
 
 struct _FILTER_DEVICE_EXTENSION
 {
-	NDIS_HANDLE hNdisFilterDevice;
-	UINT ipAddresses[128];
-	INT numberOfAddresses;
+	NDIS_HANDLE hNdisFilterDriver;
+	NDIS_HANDLE hNdisDevice;
 };
 
+
+typedef struct _ETH_HEADER ETH_HEADER;
+typedef struct _IP_HEADER IP_HEADER;
+typedef struct _IP_ADDRESS IP_ADDRESS;
+typedef struct _FILTER_EXTENSION FILTER_EXTENSION;
 typedef struct _FILTER_DEVICE_EXTENSION FILTER_DEVICE_EXTENSION;
-typedef FILTER_DEVICE_EXTENSION* PFILTER_DEVICE_EXTENSION;
 
-NDIS_HANDLE hNdisFilterDriver;
-NDIS_HANDLE hNdisDevice;
+typedef ETH_HEADER *PETH_HEADER;
+typedef IP_HEADER *PIP_HEADER;
+typedef IP_ADDRESS *PIP_ADDRESS;
+typedef FILTER_EXTENSION *PFILTER_EXTENSION;
+typedef FILTER_DEVICE_EXTENSION *PFILTER_DEVICE_EXTENSION;
 
-NTSTATUS
-DriverEntry(
-	PDRIVER_OBJECT pDriverObject,
-	PUNICODE_STRING pRegistryPath);
-
+typedef 
 VOID
-IoCompleteIrp(
-	PIRP pIrp,
-	NTSTATUS status,
-	ULONG infoLen);
+(CALLBACK_IP)(
+	PIP_ADDRESS,
+	PVOID);
+
+
+FILTER_PAUSE FilterPause;
+FILTER_STATUS FilterStatus;
+FILTER_ATTACH FilterAttach;
+FILTER_DETACH FilterDetach;
+DRIVER_UNLOAD DriverUnload;
+FILTER_RESTART FilterRestart;
+DRIVER_INITIALIZE DriverEntry;
+FILTER_SEND_NET_BUFFER_LISTS FilterSendNetBufferLists;
+FILTER_RETURN_NET_BUFFER_LISTS FilterReturnNetBufferLists;
+FILTER_RECEIVE_NET_BUFFER_LISTS FilterReceiveNetBufferLists;
+FILTER_SEND_NET_BUFFER_LISTS_COMPLETE FilterSendNetBufferListsComplete;
+
 
 NTSTATUS
 DriverAccessControlRoutine(
 	PDEVICE_OBJECT pDeviceObject,
 	PIRP pIrp);
 
-NTSTATUS
-DeviceIoControlRoutine(
-	PDEVICE_OBJECT pDeviceObject,
-	PIRP pIrp);
-
 NDIS_STATUS
 RegisteringDevice(
-	VOID);
-
-NDIS_STATUS
-FilterAttach(
-	NDIS_HANDLE NdisFilterHandle,
-	NDIS_HANDLE FilterDriverContext,
-	PNDIS_FILTER_ATTACH_PARAMETERS AttachParameters);
-
-NDIS_STATUS
-FilterRestart(
-	NDIS_HANDLE FilterModuleContext,
-	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters);
-
-VOID
-FilterReceiveNetBufferLists(
-	NDIS_HANDLE FilterModuleContext,
-	PNET_BUFFER_LIST NetBufferLists,
-	NDIS_PORT_NUMBER PortNumber,
-	ULONG NumberOfNetBufferLists,
-	ULONG ReceiveFlags);
-
-NDIS_STATUS
-FilterPause(
-	NDIS_HANDLE FilterModuleContext,
-	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters);
-
-VOID
-FilterDetach(
-	NDIS_HANDLE FilterModuleContext);
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension);
 
 VOID
 DeregisteringDevice(
 	NDIS_HANDLE hFilterDriver);
 
 VOID
-DriverUnload(
-	PDRIVER_OBJECT pDriverObject);
+DeserializationNetBufferLists(
+	PNET_BUFFER_LIST netBufferLists,
+	CALLBACK_IP CallbackGettingIP,
+	PVOID pContext);
+
+BOOLEAN
+CheckForUniq(
+	PUINT ips,
+	INT size,
+	UINT newIp);
+
+VOID
+FixingIP(
+	PIP_ADDRESS pIpAddress,
+	PFILTER_EXTENSION pFilterExtension);
 
 
 NTSTATUS
@@ -176,11 +197,13 @@ DriverEntry(
 	PDRIVER_OBJECT pDriverObject,
 	PUNICODE_STRING pRegistryPath)
 {
-	DEBUGP(DL_TRACE, "==> DriverEntry");
+	DEBUGP(DL_TRACE, "==> DriverEntry\n");
 
 	UNREFERENCED_PARAMETER(pRegistryPath);
 
 	NDIS_STATUS status;
+
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension;
 
 	NDIS_STRING friendlyName = RTL_CONSTANT_STRING(FILTER_FRIENDLY_NAME);
 	NDIS_STRING serviceName = RTL_CONSTANT_STRING(FILTER_SERVICE_NAME);
@@ -193,62 +216,67 @@ DriverEntry(
 	filterDriverCharacteristics.Header.Revision = NDIS_FILTER_CHARACTERISTICS_REVISION_2;
 	filterDriverCharacteristics.Header.Size = sizeof(NDIS_FILTER_DRIVER_CHARACTERISTICS);
 
-	filterDriverCharacteristics.MajorNdisVersion = 6;
-	filterDriverCharacteristics.MinorNdisVersion = 30;
+	filterDriverCharacteristics.MajorNdisVersion = FILTER_MAJOR_NDIS_VERSION;
+	filterDriverCharacteristics.MinorNdisVersion = FILTER_MINOR_NDIS_VERSION;
 
 	filterDriverCharacteristics.FriendlyName = friendlyName;
 	filterDriverCharacteristics.ServiceName = serviceName;
 	filterDriverCharacteristics.UniqueName = uniqueName;
 
-	filterDriverCharacteristics.MajorDriverVersion = 1;
+	filterDriverCharacteristics.MajorDriverVersion = FILTER_MAJOR_DRIVER_VERSION;
 
+	filterDriverCharacteristics.SendNetBufferListsCompleteHandler = FilterSendNetBufferListsComplete;
 	filterDriverCharacteristics.ReceiveNetBufferListsHandler = FilterReceiveNetBufferLists;
+	filterDriverCharacteristics.ReturnNetBufferListsHandler = FilterReturnNetBufferLists;
+	filterDriverCharacteristics.SendNetBufferListsHandler = FilterSendNetBufferLists;
 	filterDriverCharacteristics.RestartHandler = FilterRestart;
 	filterDriverCharacteristics.AttachHandler = FilterAttach;
 	filterDriverCharacteristics.DetachHandler = FilterDetach;
+	filterDriverCharacteristics.StatusHandler = FilterStatus;
 	filterDriverCharacteristics.PauseHandler = FilterPause;
 
 	pDriverObject->DriverUnload = DriverUnload;
 
 	do
 	{
+		status = IoAllocateDriverObjectExtension(
+			pDriverObject,
+			(PVOID)DriverEntry,
+			sizeof(FILTER_DEVICE_EXTENSION),
+			&pFilterDeviceExtension);
+
+		if (status != STATUS_SUCCESS)
+		{
+			DEBUGP(DL_ERROR, "Function 'IoAllocateDriverObjectExtension' failed\n");
+			break;
+		}
+
 		status = NdisFRegisterFilterDriver(
 			pDriverObject,
 			NULL,
 			&filterDriverCharacteristics,
-			&hNdisFilterDriver);
+			&pFilterDeviceExtension->hNdisFilterDriver);
 
 		if (status != NDIS_STATUS_SUCCESS)
 		{
+			DEBUGP(DL_ERROR, "Function 'NdisFRegisterFilterDriver' failed\n");
 			break;
 		}
 
-		status = RegisteringDevice();
+		status = RegisteringDevice(pFilterDeviceExtension);
 
 		if (status != NDIS_STATUS_SUCCESS)
 		{
-			NdisFDeregisterFilterDriver(hNdisFilterDriver);
+			NdisFDeregisterFilterDriver(pFilterDeviceExtension->hNdisFilterDriver);
+
+			DEBUGP(DL_ERROR, "Function 'RegisteringDevice' failed\n");
 			break;
 		}
+
 	} while (FALSE);
 
-	DEBUGP(DL_TRACE, "<== DriverEntry - status: %i", status);
+	DEBUGP(DL_TRACE, "<== DriverEntry - status: %i\n", status);
 	return status;
-}
-
-VOID
-IoCompleteIrp(
-	PIRP pIrp,
-	NTSTATUS status,
-	ULONG infoLen)
-{
-	DEBUGP(DL_TRACE, "==> IoCompleteIrp");
-
-	pIrp->IoStatus.Status = status;
-	pIrp->IoStatus.Information = infoLen;
-	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
-
-	DEBUGP(DL_TRACE, "<== IoCompleteIrp");
 }
 
 NTSTATUS
@@ -256,70 +284,56 @@ DriverAccessControlRoutine(
 	PDEVICE_OBJECT pDeviceObject,
 	PIRP pIrp)
 {
-	DEBUGP(DL_TRACE, "==> DriverAccessControlRoutine");
+	DEBUGP(DL_TRACE, "==> DriverAccessControlRoutine\n");
 
 	UNREFERENCED_PARAMETER(pDeviceObject);
 
 	NTSTATUS status = STATUS_SUCCESS;
 	PIO_STACK_LOCATION pIoStackLocation = IoGetCurrentIrpStackLocation(pIrp);
+	ULONG infoLen = 0;
 
 	switch (pIoStackLocation->MajorFunction)
 	{
 		case IRP_MJ_CREATE:
+		{
+			DEBUGP(DL_TRACE, "Driver handle has been opened\n");
 			break;
+		}
+
+		case IRP_MJ_READ:
+		{
+			DEBUGP(DL_TRACE, "Request to read data\n");
+			break;
+		}
 
 		case IRP_MJ_CLEANUP:
+		{
+			DEBUGP(DL_TRACE, "Driver handle has been cleared\n");
 			break;
+		}
 
 		case IRP_MJ_CLOSE:
+		{
+			DEBUGP(DL_TRACE, "Driver handle has been closed\n");
 			break;
-
-		default:
-			break;
+		}
 	}
 
-	IoCompleteIrp(pIrp, status, 0);
+	pIrp->IoStatus.Status = status;
+	pIrp->IoStatus.Information = infoLen;
+	IoCompleteRequest(pIrp, IO_NO_INCREMENT);
 
-	DEBUGP(DL_TRACE, "<== DriverAccessControlRoutine - status: %i", status);
-	return status;
-}
-
-NTSTATUS
-DeviceIoControlRoutine(
-	PDEVICE_OBJECT pDeviceObject,
-	PIRP pIrp)
-{
-	DEBUGP(DL_TRACE, "==> DeviceIoControlRoutine");
-
-	UNREFERENCED_PARAMETER(pDeviceObject);
-
-	NTSTATUS status = STATUS_SUCCESS;
-	PIO_STACK_LOCATION pIoStackLocation = IoGetCurrentIrpStackLocation(pIrp);
-	
-	ULONG infoLen = 0;
-	ULONG ioControlCode = pIoStackLocation->Parameters.DeviceIoControl.IoControlCode;
-
-	switch (ioControlCode)
-	{
-		default:
-			status = NDIS_STATUS_INVALID_PARAMETER;
-			break;
-	}
-
-	IoCompleteIrp(pIrp, status, infoLen);
-
-	DEBUGP(DL_TRACE, "<== DeviceIoControlRoutine - status: %i", status);
+	DEBUGP(DL_TRACE, "<== DriverAccessControlRoutine - status: %i\n", status);
 	return status;
 }
 
 NDIS_STATUS
 RegisteringDevice(
-	VOID)
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension)
 {
-	DEBUGP(DL_TRACE, "==> RegisteringDevice");
+	DEBUGP(DL_TRACE, "==> RegisteringDevice\n");
 
 	NDIS_STATUS status;
-
 	PDEVICE_OBJECT pDeviceObject;
 
 	UNICODE_STRING deviceName;
@@ -331,10 +345,10 @@ RegisteringDevice(
 	PDRIVER_DISPATCH pDriverDispatch[IRP_MJ_MAXIMUM_FUNCTION + 1];
 	NdisZeroMemory(pDriverDispatch, sizeof(pDriverDispatch));
 
-	pDriverDispatch[IRP_MJ_DEVICE_CONTROL] = DeviceIoControlRoutine;
 	pDriverDispatch[IRP_MJ_CLEANUP] = DriverAccessControlRoutine;
 	pDriverDispatch[IRP_MJ_CREATE] = DriverAccessControlRoutine;
 	pDriverDispatch[IRP_MJ_CLOSE] = DriverAccessControlRoutine;
+	pDriverDispatch[IRP_MJ_READ] = DriverAccessControlRoutine;
 
 	NDIS_DEVICE_OBJECT_ATTRIBUTES pDeviceObjectAttributes;
 	NdisZeroMemory(&pDeviceObjectAttributes, sizeof(NDIS_DEVICE_OBJECT_ATTRIBUTES));
@@ -350,18 +364,20 @@ RegisteringDevice(
 	do
 	{
 		status = NdisRegisterDeviceEx(
-			hNdisFilterDriver,
+			pFilterDeviceExtension->hNdisFilterDriver,
 			&pDeviceObjectAttributes,
 			&pDeviceObject,
-			&hNdisDevice);
+			&pFilterDeviceExtension->hNdisDevice);
 
 		if (status != NDIS_STATUS_SUCCESS)
 		{
+			DEBUGP(DL_ERROR, "Function 'NdisRegisterDeviceEx' failed\n");
 			break;
 		}
+
 	} while (FALSE);
-	
-	DEBUGP(DL_TRACE, "<== RegisteringDevice - status: %i", status);
+
+	DEBUGP(DL_TRACE, "<== RegisteringDevice - status: %i\n", status);
 	return status;
 }
 
@@ -371,33 +387,33 @@ FilterAttach(
 	NDIS_HANDLE FilterDriverContext,
 	PNDIS_FILTER_ATTACH_PARAMETERS AttachParameters)
 {
-	DEBUGP(DL_TRACE, "==> FilterAttach");
+	DEBUGP(DL_TRACE, "==> FilterAttach\n");
 
-	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+	UNREFERENCED_PARAMETER(FilterDriverContext);
+	UNREFERENCED_PARAMETER(AttachParameters);
+
+	NDIS_STATUS status;
 
 	do
-	{
-		if (AttachParameters->MiniportMediaType != NdisMedium802_3
-			&& AttachParameters->MiniportMediaType != NdisMediumWan
-			&& AttachParameters->MiniportMediaType != NdisMediumWirelessWan)
-		{
-			status = NDIS_STATUS_INVALID_PARAMETER;
-			break;
-		}
-		
-		PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = NdisAllocateMemoryWithTagPriority(
+	{	
+		PFILTER_EXTENSION pFilterExtension;
+
+		pFilterExtension = NdisAllocateMemoryWithTagPriority(
 			NdisFilterHandle,
-			sizeof(FILTER_DEVICE_EXTENSION),
-			'NTA',
+			sizeof(FILTER_EXTENSION),
+			FILTER_TAG,
 			LowPoolPriority);
 
-		if (!pFilterDeviceExtension)
+		if (!pFilterExtension)
 		{
 			status = STATUS_BUFFER_ALL_ZEROS;
+
+			DEBUGP(DL_ERROR, "Function 'NdisAllocateMemoryWithTagPriority' failed\n");
 			break;
 		}
 
-		pFilterDeviceExtension->hNdisFilterDevice = NdisFilterHandle;
+		NdisZeroMemory(pFilterExtension, sizeof(FILTER_EXTENSION));
+		pFilterExtension->hNdisFilterDevice = NdisFilterHandle;
 
 		NDIS_FILTER_ATTRIBUTES filterAttributes;
 		NdisZeroMemory(&filterAttributes, sizeof(NDIS_FILTER_ATTRIBUTES));
@@ -408,17 +424,18 @@ FilterAttach(
 
 		status = NdisFSetAttributes(
 			NdisFilterHandle,
-			pFilterDeviceExtension,
+			pFilterExtension,
 			&filterAttributes);
 
 		if (status != NDIS_STATUS_SUCCESS)
 		{
+			DEBUGP(DL_ERROR, "Function 'NdisFSetAttributes' failed\n");
 			break;
 		}
 
 	} while (FALSE);
 	
-	DEBUGP(DL_TRACE, "<== FilterAttach - status: %i", status);
+	DEBUGP(DL_TRACE, "<== FilterAttach - status: %i\n", status);
 	return status;
 }
 
@@ -427,15 +444,84 @@ FilterRestart(
 	NDIS_HANDLE FilterModuleContext,
 	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters)
 {
-	DEBUGP(DL_TRACE, "==> FilterRestart");
+	DEBUGP(DL_TRACE, "==> FilterRestart\n");
 
 	UNREFERENCED_PARAMETER(FilterModuleContext);
 	UNREFERENCED_PARAMETER(RestartParameters);
 
 	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
 
-	DEBUGP(DL_TRACE, "<== FilterRestart - status %i", status);
+	DEBUGP(DL_TRACE, "<== FilterRestart - status %i\n", status);
 	return status;
+}
+
+VOID
+FilterReceiveNetBufferLists(
+	NDIS_HANDLE FilterModuleContext,
+	PNET_BUFFER_LIST NetBufferLists,
+	NDIS_PORT_NUMBER PortNumber,
+	ULONG NumberOfNetBufferLists,
+	ULONG ReceiveFlags)
+{
+	DEBUGP(DL_TRACE, "==> FilterReceiveNetBufferLists\n");
+
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
+
+	NdisFIndicateReceiveNetBufferLists(
+		pFilterExtension->hNdisFilterDevice,
+		NetBufferLists,
+		PortNumber,
+		NumberOfNetBufferLists,
+		ReceiveFlags);
+
+	DEBUGP(DL_TRACE, "<== FilterReceiveNetBufferLists\n");
+}
+
+VOID
+DeserializationNetBufferLists(
+	PNET_BUFFER_LIST netBufferLists,
+	CALLBACK_IP CallbackGettingIP,
+	PVOID pContext)
+{
+	PUCHAR headerBuffer;
+	PIP_HEADER ipHeader;
+	PETH_HEADER ethHeader;
+
+	for (
+		PNET_BUFFER_LIST netBufferList = netBufferLists;
+		netBufferList;
+		netBufferList = NET_BUFFER_LIST_NEXT_NBL(netBufferList))
+	{
+		for (
+			PNET_BUFFER netBuffer = NET_BUFFER_LIST_FIRST_NB(netBufferList);
+			netBuffer;
+			netBuffer = NET_BUFFER_NEXT_NB(netBuffer))
+		{
+			headerBuffer = NdisGetDataBuffer(
+				netBuffer,
+				sizeof(ETH_HEADER) + sizeof(IP_HEADER),
+				NULL, 1, 0);
+
+			if (!headerBuffer)
+			{
+				continue;
+			}
+
+			ethHeader = (PETH_HEADER)headerBuffer;
+			if (ntohs(ethHeader->h_proto) != ETH_TYPE_IP)
+			{
+				continue;
+			}
+
+			ipHeader = (PIP_HEADER)((ULONG_PTR)ethHeader + sizeof(ETH_HEADER));
+
+			IP_ADDRESS ipAddress;
+			ipAddress.dst = ipHeader->ip_dst;
+			ipAddress.src = ipHeader->ip_src;
+
+			CallbackGettingIP(&ipAddress, pContext);
+		}
+	}
 }
 
 BOOLEAN
@@ -448,93 +534,128 @@ CheckForUniq(
 	{
 		if (ips[i] == newIp)
 		{
-			return TRUE;
+			return FALSE;
 		}
 	}
 
-	return FALSE;
+	return TRUE;
 }
 
 VOID
-FilterReceiveNetBufferLists(
+SetIP(
+	PFILTER_EXTENSION pFilterExtension,
+	UINT ip)
+{
+	BOOLEAN status = CheckForUniq(
+		pFilterExtension->arrayOfAddresses,
+		pFilterExtension->numberOfUniqueAddresses,
+		ip);
+
+	if (status)
+	{
+		pFilterExtension->arrayOfAddresses[
+			pFilterExtension->numberOfUniqueAddresses++] = ip;
+	}
+}
+
+VOID
+FixingIP(
+	PIP_ADDRESS pIpAddress,
+	PFILTER_EXTENSION pFilterExtension)
+{
+	SetIP(pFilterExtension, pIpAddress->dst);
+	SetIP(pFilterExtension, pIpAddress->src);
+
+	++pFilterExtension->numberOfFilteredPackets;
+
+	PUINT8 ipDst = NORMALIZATION_OF_ADDRESS(pIpAddress->dst);
+	PUINT8 ipSrc = NORMALIZATION_OF_ADDRESS(pIpAddress->src);
+
+	DEBUGP(DL_WARN, "IP - %hhu.%hhu.%hhu.%hhu > %hhu.%hhu.%hhu.%hhu\n",
+		ipSrc[0], ipSrc[1], ipSrc[2], ipSrc[3],
+		ipDst[0], ipDst[1], ipDst[2], ipDst[3]);
+}
+
+VOID
+FilterReturnNetBufferLists(
 	NDIS_HANDLE FilterModuleContext,
 	PNET_BUFFER_LIST NetBufferLists,
-	NDIS_PORT_NUMBER PortNumber,
-	ULONG NumberOfNetBufferLists,
-	ULONG ReceiveFlags)
+	ULONG ReturnFlags)
 {
-	DEBUGP(DL_TRACE, "==> FilterReceiveNetBufferLists");
+	DEBUGP(DL_TRACE, "==> FilterReturnNetBufferLists\n");
 
-	PUCHAR headerBuffer;
-	PIP_HEADER ipHeader;
-	PETH_HEADER ethHeader;
-	UCHAR localBuffer[NB_SIZE];
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
 
-	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension = FilterModuleContext;
-	INT numberOfAddresses = pFilterDeviceExtension->numberOfAddresses;
-	PUINT ipAddresses = pFilterDeviceExtension->ipAddresses;
-
-	PUINT8 ipDst;
-	PUINT8 ipSrc;
-
-	for (
-		PNET_BUFFER_LIST netBufferList = NetBufferLists; 
-		netBufferList; 
-		netBufferList = NET_BUFFER_LIST_NEXT_NBL(netBufferList))
-	{
-		for (
-			PNET_BUFFER netBuffer = NET_BUFFER_LIST_FIRST_NB(netBufferList);
-			netBuffer;
-			netBuffer = NET_BUFFER_NEXT_NB(netBuffer))
-		{
-			headerBuffer = NdisGetDataBuffer(netBuffer, NB_SIZE, localBuffer, 1, 1);
-
-			if (!headerBuffer)
-			{
-				continue;
-			}
-
-			ethHeader = (PETH_HEADER)headerBuffer;
-
-			if (ntohs(ethHeader->h_proto) != ETH_TYPE_IP)
-			{
-				continue;
-			}
-
-			ipHeader = (PIP_HEADER)((ULONG_PTR)ethHeader + sizeof(ETH_HEADER));
-
-			if (ipHeader->ip_p != IPPROTO_ICMP)
-			{
-				continue;
-			}
-
-			if (!CheckForUniq(ipAddresses, numberOfAddresses, ipHeader->ip_dst))
-			{
-				ipAddresses[numberOfAddresses++] = ipHeader->ip_dst;
-			}
-
-			if (!CheckForUniq(ipAddresses, numberOfAddresses, ipHeader->ip_src))
-			{
-				ipAddresses[numberOfAddresses++] = ipHeader->ip_src;
-			}
-
-			ipDst = (PUINT8)&ipHeader->ip_dst;
-			ipSrc = (PUINT8)&ipHeader->ip_src;
-
-			DEBUGP(DL_INFO, "IP - %hhu.%hhu.%hhu.%hhu < %hhu.%hhu.%hhu.%hhu",
-				ipDst[0], ipDst[1], ipDst[2], ipDst[3],
-				ipSrc[0], ipSrc[1], ipSrc[2], ipSrc[3]);
-		}
-	}
-
-	NdisFIndicateReceiveNetBufferLists(
-		pFilterDeviceExtension->hNdisFilterDevice,
+	DeserializationNetBufferLists(
 		NetBufferLists,
-		PortNumber,
-		NumberOfNetBufferLists,
-		ReceiveFlags);
+		FixingIP,
+		pFilterExtension);
 
-	DEBUGP(DL_TRACE, "<== FilterReceiveNetBufferLists");
+	NdisFReturnNetBufferLists(
+		pFilterExtension->hNdisFilterDevice,
+		NetBufferLists,
+		ReturnFlags);
+
+	DEBUGP(DL_TRACE, "<== FilterReturnNetBufferLists\n");
+}
+
+VOID
+FilterSendNetBufferLists(
+	NDIS_HANDLE FilterModuleContext,
+	PNET_BUFFER_LIST NetBufferList,
+	NDIS_PORT_NUMBER PortNumber,
+	ULONG SendFlags)
+{
+	DEBUGP(DL_TRACE, "==> FilterSendNetBufferLists\n");
+
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
+
+	NdisFSendNetBufferLists(
+		pFilterExtension->hNdisFilterDevice,
+		NetBufferList,
+		PortNumber,
+		SendFlags);
+
+	DEBUGP(DL_TRACE, "<== FilterSendNetBufferLists\n");
+}
+
+VOID
+FilterSendNetBufferListsComplete(
+	NDIS_HANDLE FilterModuleContext,
+	PNET_BUFFER_LIST NetBufferList,
+	ULONG SendCompleteFlags)
+{
+	DEBUGP(DL_TRACE, "==> FilterSendNetBufferListsComplete\n");
+
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
+
+	DeserializationNetBufferLists(
+		NetBufferList,
+		FixingIP,
+		pFilterExtension);
+
+	NdisFSendNetBufferListsComplete(
+		pFilterExtension->hNdisFilterDevice,
+		NetBufferList,
+		SendCompleteFlags);
+
+	DEBUGP(DL_TRACE, "<== FilterSendNetBufferListsComplete\n");
+}
+
+VOID
+FilterStatus(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_STATUS_INDICATION StatusIndication)
+{
+	DEBUGP(DL_TRACE, "==> FilterStatus\n");
+
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
+
+	NdisFIndicateStatus(
+		pFilterExtension->hNdisFilterDevice,
+		StatusIndication);
+
+	DEBUGP(DL_TRACE, "<== FilterStatus\n");
 }
 
 NDIS_STATUS
@@ -542,14 +663,14 @@ FilterPause(
 	NDIS_HANDLE FilterModuleContext,
 	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters)
 {
-	DEBUGP(DL_TRACE, "==> FilterPause");
+	DEBUGP(DL_TRACE, "==> FilterPause\n");
 
 	UNREFERENCED_PARAMETER(FilterModuleContext);
 	UNREFERENCED_PARAMETER(PauseParameters);
 
 	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
 
-	DEBUGP(DL_TRACE, "<== FilterPause - status %i", status);
+	DEBUGP(DL_TRACE, "<== FilterPause - status %i\n", status);
 	return status;
 }
 
@@ -557,34 +678,35 @@ VOID
 FilterDetach(
 	NDIS_HANDLE FilterModuleContext)
 {
-	DEBUGP(DL_TRACE, "==> FilterDetach");
+	DEBUGP(DL_TRACE, "==> FilterDetach\n");
 
-	UNREFERENCED_PARAMETER(FilterModuleContext);
+	NdisFreeMemory(FilterModuleContext, sizeof(FILTER_EXTENSION), 0);
 
-	DEBUGP(DL_TRACE, "<== FilterDetach");
+	DEBUGP(DL_TRACE, "<== FilterDetach\n");
 }
 
 VOID
 DeregisteringDevice(
 	NDIS_HANDLE hFilterDriver)
 {
-	DEBUGP(DL_TRACE, "==> DeregisteringDevice");
+	DEBUGP(DL_TRACE, "==> DeregisteringDevice\n");
 
 	NdisDeregisterDeviceEx(hFilterDriver);
 
-	DEBUGP(DL_TRACE, "<== DeregisteringDevice");
+	DEBUGP(DL_TRACE, "<== DeregisteringDevice\n");
 }
 
 VOID
 DriverUnload(
 	PDRIVER_OBJECT pDriverObject)
 {
-	DEBUGP(DL_TRACE, "==> DriverUnload");
+	DEBUGP(DL_TRACE, "==> DriverUnload\n");
 
-	UNREFERENCED_PARAMETER(pDriverObject);
+	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension
+		= IoGetDriverObjectExtension(pDriverObject, (PVOID)DriverEntry);
 
-	DeregisteringDevice(hNdisDevice);
-	NdisFDeregisterFilterDriver(hNdisFilterDriver);
+	DeregisteringDevice(pFilterDeviceExtension->hNdisDevice);
+	NdisFDeregisterFilterDriver(pFilterDeviceExtension->hNdisFilterDriver);
 
-	DEBUGP(DL_TRACE, "<== DriverUnload");
+	DEBUGP(DL_TRACE, "<== DriverUnload\n");
 }
