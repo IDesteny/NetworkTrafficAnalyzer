@@ -23,7 +23,7 @@
 	L"Intel(R) 82574L Gigabit Network Connection"
 
 #define FILTER_FRIENDLY_NAME \
-	FILTER_SERVICE_NAME L"NDIS Filter"
+	FILTER_SERVICE_NAME L" NDIS Filter"
 
 #define LINKNAME_STRING \
 	L"\\DosDevices\\" FILTER_SERVICE_NAME
@@ -69,11 +69,16 @@ DbgPrintExWithPrefix(
 	va_end(arglist);
 }
 
-#pragma warning(disable: 4127)
+INT
+GetDebugLevel(
+	VOID)
+{
+	return DEBUG_LVL;
+}
 
 #define DEBUGP(lvl, ...)				\
 {								\
-	if ((lvl) <= DEBUG_LVL)			\
+	if ((lvl) <= GetDebugLevel())		\
 	{							\
 		DbgPrintExWithPrefix("NTA: ",	\
 			DPFLTR_IHVNETWORK_ID,	\
@@ -97,8 +102,6 @@ DbgPrintExWithPrefix(
 
 #define NORMALIZATION_OF_ADDRESS(addr) \
 	(PUINT8)&(addr);
-
-#define SIZE_OF_ADDRESS_ARRAY 128
 
 #define DRIVER_POOL_ID \
 	(PVOID)DriverEntry
@@ -246,11 +249,6 @@ DriverAccessControlRoutine(
 		PIO_STACK_LOCATION pIoStackLocation;
 		pIoStackLocation = IoGetCurrentIrpStackLocation(pIrp);
 
-		if (pIoStackLocation->MajorFunction != IRP_MJ_READ)
-		{
-			break;
-		}
-
 		INT listLen = GetListLength(pGlobalHeadListEntry);
 		infoLen = listLen * sizeof(UINT);
 
@@ -265,20 +263,8 @@ DriverAccessControlRoutine(
 			break;
 		}
 
-		PUINT outData = ExAllocatePool2(
-			POOL_FLAG_NON_PAGED,
-			infoLen,
-			FILTER_TAG);
-
-		if (!outData)
-		{
-			DEBUGP(DL_WARN, "Function 'ExAllocatePool2' failed\n");
-			break;
-		}
-
-		NdisZeroMemory(outData, infoLen);
-
-#pragma warning(disable: 6386)
+		PUINT outBuffer = pIrp->UserBuffer;
+		NdisZeroMemory(outBuffer, infoLen);
 
 		INT iterList = 0;
 		PIP_ADDRESS_LIST_ENTRY pIp;
@@ -290,17 +276,8 @@ DriverAccessControlRoutine(
 				IP_ADDRESS_LIST_ENTRY,
 				listEntry);
 
-			outData[iterList++] = pIp->ip;
+			outBuffer[iterList++] = pIp->ip;
 		}
-
-#pragma warning(default: 6386)
-
-		NdisMoveMemory(
-			pIrp->UserBuffer,
-			outData,
-			infoLen);
-
-		ExFreePoolWithTag(outData, FILTER_TAG);
 
 	} while (FALSE);
 
@@ -490,7 +467,7 @@ FilterAttach(
 
 		NdisZeroMemory(pFilterExtension, SIZEOF_FILTER_EXTENSION);
 		pFilterExtension->hNdisFilterDevice = NdisFilterHandle;
-
+		
 		PLIST_ENTRY pHeadListEntry;
 		pHeadListEntry = &pFilterExtension->ipAddressListEntry.listEntry;
 		InitializeListHead(pHeadListEntry);
@@ -794,7 +771,3 @@ DriverUnload(
 
 	DEBUGP(DL_TRACE, "<== DriverUnload\n");
 }
-
-#ifdef DBG
-#pragma warning(default: 4127)
-#endif
