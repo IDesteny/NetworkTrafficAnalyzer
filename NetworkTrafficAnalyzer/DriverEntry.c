@@ -1,13 +1,3 @@
-/*
-* Tasks:
-* - Add read request processing
-* - Add null checks
-* - Try adding asynchronous deserialization
-* - Add comments
-* - CLeanup
-*/
-
-
 #define NDIS630
 #include <ndis.h>
 #include <stdarg.h>
@@ -23,7 +13,7 @@
 	L"Intel(R) 82574L Gigabit Network Connection"
 
 #define FILTER_FRIENDLY_NAME \
-	FILTER_SERVICE_NAME L"NDIS Filter"
+	FILTER_SERVICE_NAME L" NDIS Filter"
 
 #define LINKNAME_STRING \
 	L"\\DosDevices\\" FILTER_SERVICE_NAME
@@ -46,7 +36,7 @@
 #define DL_WARN	1
 #define DL_ERROR	0
 
-#define DEBUG_LVL DL_WARN
+INT debugLvl = DL_WARN;
 
 VOID
 DbgPrintExWithPrefix(
@@ -69,11 +59,9 @@ DbgPrintExWithPrefix(
 	va_end(arglist);
 }
 
-#pragma warning(disable: 4127)
-
 #define DEBUGP(lvl, ...)				\
 {								\
-	if ((lvl) <= DEBUG_LVL)			\
+	if ((lvl) <= debugLvl)			\
 	{							\
 		DbgPrintExWithPrefix("NTA: ",	\
 			DPFLTR_IHVNETWORK_ID,	\
@@ -98,8 +86,6 @@ DbgPrintExWithPrefix(
 #define NORMALIZATION_OF_ADDRESS(addr) \
 	(PUINT8)&(addr);
 
-#define SIZE_OF_ADDRESS_ARRAY 128
-
 #define DRIVER_POOL_ID \
 	(PVOID)DriverEntry
 
@@ -108,6 +94,9 @@ DbgPrintExWithPrefix(
 
 #define SIZEOF_FILTER_EXTENSION \
 	sizeof(FILTER_EXTENSION)
+
+#define SIZEOF_PFILTER_EXTENSION \
+	sizeof(PFILTER_EXTENSION)
 
 #define SIZEOF_IP_ADDRESS_LIST_ENTRY \
 	sizeof(IP_ADDRESS_LIST_ENTRY)
@@ -172,10 +161,17 @@ typedef struct _IP_ADDRESS_LIST_ENTRY
 
 } IP_ADDRESS_LIST_ENTRY, *PIP_ADDRESS_LIST_ENTRY;
 
+typedef struct _IP_ADDRESS_LIST_HANDLE
+{
+	IP_ADDRESS_LIST_ENTRY ipAddressListEntry;
+	NDIS_SPIN_LOCK SpinLock;
+
+} IP_ADDRESS_LIST_HANDLE, *PIP_ADDRESS_LIST_HANDLE;
+
 typedef struct _FILTER_EXTENSION
 {
 	NDIS_HANDLE hNdisFilterDevice;
-	IP_ADDRESS_LIST_ENTRY ipAddressListEntry;
+	IP_ADDRESS_LIST_HANDLE ipAddressListHandle;
 
 } FILTER_EXTENSION, *PFILTER_EXTENSION;
 
@@ -197,18 +193,24 @@ DRIVER_INITIALIZE DriverEntry;
 FILTER_RETURN_NET_BUFFER_LISTS FilterReturnNetBufferLists;
 FILTER_SEND_NET_BUFFER_LISTS_COMPLETE FilterSendNetBufferListsComplete;
 
-PLIST_ENTRY pGlobalHeadListEntry;
 
 INT
 GetListLength(
-	PLIST_ENTRY pHeadList)
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle)
 {
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+	NdisAcquireSpinLock(pSpinLock);
+
+	PLIST_ENTRY pHeadListEntry;
+	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
 	INT listLen = 0;
-	LIST_ENTRY_FOR_EACH(entry, pHeadList)
+	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
 	{
 		++listLen;
 	}
 
+	NdisReleaseSpinLock(pSpinLock);
 	return listLen;
 }
 
@@ -237,21 +239,31 @@ DriverAccessControlRoutine(
 
 	do
 	{
-		if (!pGlobalHeadListEntry)
-		{
-			DEBUGP(DL_WARN, "Invalid base miniport name\n");
-			break;
-		}
-
 		PIO_STACK_LOCATION pIoStackLocation;
 		pIoStackLocation = IoGetCurrentIrpStackLocation(pIrp);
-
 		if (pIoStackLocation->MajorFunction != IRP_MJ_READ)
 		{
 			break;
 		}
 
-		INT listLen = GetListLength(pGlobalHeadListEntry);
+		PFILTER_EXTENSION *pReservedExtension;
+		pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
+		if (!pReservedExtension)
+		{
+			status = STATUS_DEVICE_NOT_READY;
+
+			DEBUGP(DL_WARN, "Driver not attached\n");
+			break;
+		}
+
+		PFILTER_EXTENSION pFilterExtension = *pReservedExtension;
+
+		PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
+		pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
+
+		
+
+		INT listLen = GetListLength(pIpAddressListHandle);
 		infoLen = listLen * sizeof(UINT);
 
 		ULONG userBuffLen;
@@ -259,48 +271,35 @@ DriverAccessControlRoutine(
 
 		if (userBuffLen < infoLen)
 		{
-			DEBUGP(DL_WARN, "Not enough buffer size. User Buffer: %lu, Necessary: %lu\n", userBuffLen, infoLen);
-
 			status = STATUS_BUFFER_TOO_SMALL;
+
+			DEBUGP(DL_WARN, "Not enough buffer size. User Buffer: %lu, Necessary: %lu\n", userBuffLen, infoLen);
 			break;
 		}
 
-		PUINT outData = ExAllocatePool2(
-			POOL_FLAG_NON_PAGED,
-			infoLen,
-			FILTER_TAG);
+		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+		NdisAcquireSpinLock(pSpinLock);
 
-		if (!outData)
-		{
-			DEBUGP(DL_WARN, "Function 'ExAllocatePool2' failed\n");
-			break;
-		}
-
-		NdisZeroMemory(outData, infoLen);
-
-#pragma warning(disable: 6386)
+		PUINT outBuffer = pIrp->UserBuffer;
+		NdisZeroMemory(outBuffer, infoLen);
 
 		INT iterList = 0;
 		PIP_ADDRESS_LIST_ENTRY pIp;
 
-		LIST_ENTRY_FOR_EACH(entry, pGlobalHeadListEntry)
+		PLIST_ENTRY pHeadListEntry;
+		pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
+		LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
 		{
 			pIp = CONTAINING_RECORD(
 				entry,
 				IP_ADDRESS_LIST_ENTRY,
 				listEntry);
 
-			outData[iterList++] = pIp->ip;
+			outBuffer[iterList++] = pIp->ip;
 		}
 
-#pragma warning(default: 6386)
-
-		NdisMoveMemory(
-			pIrp->UserBuffer,
-			outData,
-			infoLen);
-
-		ExFreePoolWithTag(outData, FILTER_TAG);
+		NdisReleaseSpinLock(pSpinLock);
 
 	} while (FALSE);
 
@@ -342,6 +341,7 @@ RegisteringDevice(
 	deviceObjectAttributes.MajorFunctions = pDriverDispatch;
 	deviceObjectAttributes.DeviceName = &deviceName;
 	deviceObjectAttributes.SymbolicName = &deviceLinkUnicodeString;
+	deviceObjectAttributes.ExtensionSize = SIZEOF_PFILTER_EXTENSION;
 
 	do
 	{
@@ -356,6 +356,9 @@ RegisteringDevice(
 			DEBUGP(DL_ERROR, "Function 'NdisRegisterDeviceEx' failed\n");
 			break;
 		}
+
+		PVOID pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
+		NdisZeroMemory(pReservedExtension, SIZEOF_PFILTER_EXTENSION);
 
 	} while (FALSE);
 
@@ -374,16 +377,16 @@ DriverEntry(
 
 	NDIS_STATUS status;
 	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension;
+	NDIS_FILTER_DRIVER_CHARACTERISTICS filterDriverCharacteristics;
 
 	NDIS_STRING friendlyName = RTL_CONSTANT_STRING(FILTER_FRIENDLY_NAME);
 	NDIS_STRING serviceName = RTL_CONSTANT_STRING(FILTER_SERVICE_NAME);
 	NDIS_STRING uniqueName = RTL_CONSTANT_STRING(FILTER_UNIQUE_NAME);
 
-	NDIS_FILTER_DRIVER_CHARACTERISTICS filterDriverCharacteristics;
 	NdisZeroMemory(&filterDriverCharacteristics, NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_2);
 
-	filterDriverCharacteristics.Header.Revision = NDIS_FILTER_CHARACTERISTICS_REVISION_2;
 	filterDriverCharacteristics.Header.Size = NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_2;
+	filterDriverCharacteristics.Header.Revision = NDIS_FILTER_CHARACTERISTICS_REVISION_2;
 	filterDriverCharacteristics.Header.Type = NDIS_OBJECT_TYPE_FILTER_DRIVER_CHARACTERISTICS;
 
 	filterDriverCharacteristics.MajorDriverVersion = FILTER_MAJOR_DRIVER_VERSION;
@@ -421,7 +424,7 @@ DriverEntry(
 
 		status = NdisFRegisterFilterDriver(
 			pDriverObject,
-			NULL,
+			pDriverObject,
 			&filterDriverCharacteristics,
 			&pFilterDeviceExtension->hNdisFilterDriver);
 
@@ -467,9 +470,9 @@ FilterAttach(
 			mediaType != NdisMediumWan &&
 			mediaType != NdisMediumWirelessWan)
 		{
-			DEBUGP(DL_ERROR, "Unsupported media type\n");
-
 			status = NDIS_STATUS_INVALID_PARAMETER;
+
+			DEBUGP(DL_ERROR, "Unsupported media type\n");
 			break;
 		}
 
@@ -482,18 +485,28 @@ FilterAttach(
 
 		if (!pFilterExtension)
 		{
-			DEBUGP(DL_ERROR, "Function 'NdisAllocateMemoryWithTagPriority' failed\n");
-
 			status = STATUS_BUFFER_ALL_ZEROS;
+
+			DEBUGP(DL_ERROR, "Function 'NdisAllocateMemoryWithTagPriority' failed\n");
 			break;
 		}
 
 		NdisZeroMemory(pFilterExtension, SIZEOF_FILTER_EXTENSION);
 		pFilterExtension->hNdisFilterDevice = NdisFilterHandle;
 
-		PLIST_ENTRY pHeadListEntry;
-		pHeadListEntry = &pFilterExtension->ipAddressListEntry.listEntry;
-		InitializeListHead(pHeadListEntry);
+		PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
+		pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
+
+		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+		NdisAllocateSpinLock(pSpinLock);
+
+		NdisAcquireSpinLock(pSpinLock);
+
+		PLIST_ENTRY pListEntry;
+		pListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+		InitializeListHead(pListEntry);
+
+		NdisReleaseSpinLock(pSpinLock);
 
 		SIZE_T result = RtlCompareMemory(
 			AttachParameters->BaseMiniportInstanceName->Buffer,
@@ -502,7 +515,13 @@ FilterAttach(
 
 		if (result == SIZEOF_BASE_MINIPORT)
 		{
-			pGlobalHeadListEntry = &pFilterExtension->ipAddressListEntry.listEntry;
+			PDRIVER_OBJECT pDriverObject = FilterDriverContext;
+
+			PFILTER_EXTENSION *pReservedExtension;
+			pReservedExtension = NdisGetDeviceReservedExtension(
+				pDriverObject->DeviceObject);
+
+			*pReservedExtension = pFilterExtension;
 		}
 
 		NDIS_FILTER_ATTRIBUTES filterAttributes;
@@ -519,6 +538,11 @@ FilterAttach(
 
 		if (status != NDIS_STATUS_SUCCESS)
 		{
+			NdisFreeMemoryWithTagPriority(
+				NdisFilterHandle,
+				pFilterExtension,
+				FILTER_TAG);
+
 			DEBUGP(DL_ERROR, "Function 'NdisFSetAttributes' failed\n");
 			break;
 		}
@@ -546,11 +570,16 @@ FilterRestart(
 }
 
 BOOLEAN
-CheckForUniq(
-	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry,
+ElementExists(
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	UINT newIp)
 {
-	PLIST_ENTRY pHeadListEntry = &pIpAddressListEntry->listEntry;
+	BOOLEAN result = FALSE;
+
+	NdisAcquireSpinLock(&pIpAddressListHandle->SpinLock);
+
+	PLIST_ENTRY pHeadListEntry;
+	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 	PIP_ADDRESS_LIST_ENTRY pCurrentIpAddressListEntry;
 
 	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
@@ -562,21 +591,23 @@ CheckForUniq(
 
 		if (pCurrentIpAddressListEntry->ip == newIp)
 		{
-			return FALSE;
+			result = TRUE;
+			break;
 		}
 	}
 
-	return TRUE;
+	NdisReleaseSpinLock(&pIpAddressListHandle->SpinLock);
+	return result;
 }
 
 VOID
-InsertIp(
-	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry,
+AddIpAddress(
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	UINT ip)
 {
 	do
 	{
-		if (!CheckForUniq(pIpAddressListEntry, ip))
+		if (ElementExists(pIpAddressListHandle, ip))
 		{
 			break;
 		}
@@ -595,20 +626,29 @@ InsertIp(
 
 		pNewIpAddressListEntry->ip = ip;
 
+		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+
+		NdisAcquireSpinLock(pSpinLock);
+
+		PLIST_ENTRY pHeadListEntry;
+		pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
 		InsertHeadList(
-			&pIpAddressListEntry->listEntry,
+			pHeadListEntry,
 			&pNewIpAddressListEntry->listEntry);
+
+		NdisReleaseSpinLock(pSpinLock);
 
 	} while (FALSE);
 }
 
 VOID
-IpAddressHandler(
-	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry,
+DesserializedInfoHandler(
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	PDESERIALIZATION_INFO pDeserealizationInfo)
 {
-	InsertIp(pIpAddressListEntry, pDeserealizationInfo->ipDst);
-	InsertIp(pIpAddressListEntry, pDeserealizationInfo->ipSrc);
+	AddIpAddress(pIpAddressListHandle, pDeserealizationInfo->ipDst);
+	AddIpAddress(pIpAddressListHandle, pDeserealizationInfo->ipSrc);
 
 	PUINT8 pIpDst = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipDst);
 	PUINT8 pIpSrc = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipSrc);
@@ -622,7 +662,7 @@ IpAddressHandler(
 
 VOID
 DeserializationNetBufferLists(
-	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry,
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	PNET_BUFFER_LIST netBufferLists)
 {
 	PUCHAR headerBuffer;
@@ -655,7 +695,7 @@ DeserializationNetBufferLists(
 			deserealizationInfo.ipDst = ipHeader->ip_dst;
 			deserealizationInfo.ipSrc = ipHeader->ip_src;
 
-			IpAddressHandler(pIpAddressListEntry, &deserealizationInfo);
+			DesserializedInfoHandler(pIpAddressListHandle, &deserealizationInfo);
 		}
 	}
 }
@@ -671,7 +711,7 @@ FilterReturnNetBufferLists(
 	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
 
 	DeserializationNetBufferLists(
-		&pFilterExtension->ipAddressListEntry,
+		&pFilterExtension->ipAddressListHandle,
 		NetBufferLists);
 
 	NdisFReturnNetBufferLists(
@@ -693,7 +733,7 @@ FilterSendNetBufferListsComplete(
 	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
 
 	DeserializationNetBufferLists(
-		&pFilterExtension->ipAddressListEntry,
+		&pFilterExtension->ipAddressListHandle,
 		NetBufferList);
 
 	NdisFSendNetBufferListsComplete(
@@ -743,12 +783,19 @@ FilterDetach(
 	DEBUGP(DL_TRACE, "==> FilterDetach\n");
 
 	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
-	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry;
 
+	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
+	pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
+
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+
+	NdisAcquireSpinLock(pSpinLock);
 	PLIST_ENTRY pHeadListEntry;
-	pHeadListEntry = &pFilterExtension->ipAddressListEntry.listEntry;
+	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
+	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry;
 	PLIST_ENTRY delEntry;
+
 	while (pHeadListEntry->Flink != pHeadListEntry)
 	{
 		delEntry = RemoveHeadList(pHeadListEntry);
@@ -760,6 +807,9 @@ FilterDetach(
 
 		ExFreePoolWithTag(pIpAddressListEntry, FILTER_TAG);
 	}
+
+	NdisReleaseSpinLock(pSpinLock);
+	NdisFreeSpinLock(pSpinLock);
 
 	NdisFreeMemoryWithTagPriority(
 		pFilterExtension->hNdisFilterDevice,
@@ -787,14 +837,12 @@ DriverUnload(
 	DEBUGP(DL_TRACE, "==> DriverUnload\n");
 
 	PFILTER_DEVICE_EXTENSION pFilterDeviceExtension;
-	pFilterDeviceExtension = IoGetDriverObjectExtension(pDriverObject, DRIVER_POOL_ID);
+	pFilterDeviceExtension = IoGetDriverObjectExtension(
+		pDriverObject,
+		DRIVER_POOL_ID);
 
 	DeregisteringDevice(pFilterDeviceExtension->hNdisDevice);
 	NdisFDeregisterFilterDriver(pFilterDeviceExtension->hNdisFilterDriver);
 
 	DEBUGP(DL_TRACE, "<== DriverUnload\n");
 }
-
-#ifdef DBG
-#pragma warning(default: 4127)
-#endif
