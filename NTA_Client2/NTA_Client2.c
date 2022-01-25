@@ -1,72 +1,100 @@
 ﻿#include <windows.h>
 #include <stdio.h>
 
+#define HEADER									\
+	"+----+-----------------+-------------------+\n"	\
+	"| #  |       IP        |        MAC        |\n"	\
+	"+----+-----------------+-------------------+\n"
+
+#define FOOTER									\
+	"+----+-----------------+-------------------+\n"
+
 #define DEVICE_NAME \
 	L"NetworkTrafficAnalyzer"
 
 #define DEVICE_PATH \
 	L"\\\\.\\" DEVICE_NAME
 
-#define BUFF_SIZE 256
+#define BUFF_SIZE 64
 
-INT main(VOID)
+typedef struct _OUTPUT_DATA_EXTENSION
 {
-	do 
+	UINT64 mac;
+	UINT ip;
+
+} OUTPUT_DATA_EXTENSION, *POUTPUT_DATA_EXTENSION;
+
+BOOL
+SetPos(
+	INT x,
+	INT y)
+{
+	return SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), (COORD){ x, y });
+}
+
+
+INT
+main(
+	VOID)
+{
+	HANDLE hDevice = CreateFile(
+		DEVICE_PATH,
+		GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE,
+		NULL, OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
+
+	if (hDevice == INVALID_HANDLE_VALUE)
 	{
-		HANDLE hDevice = CreateFile(
-			DEVICE_PATH,
-			GENERIC_READ | GENERIC_WRITE,
-			FILE_SHARE_READ | FILE_SHARE_WRITE,
-			NULL, OPEN_EXISTING,
-			FILE_ATTRIBUTE_NORMAL,
-			NULL);
+		puts("Function 'CreateFile' failed - status: %d", GetLastError());
+		return -1;
+	}
 
-		if (hDevice == INVALID_HANDLE_VALUE)
-		{
-			puts("Function 'CreateFile' failed");
-			break;
-		}
+	OUTPUT_DATA_EXTENSION ipAddresses[BUFF_SIZE] = { 0 };
 
-		UINT ipAddresses[BUFF_SIZE] = { 0 };
-		DWORD r;
-		BOOL status;
+	DWORD r;
+	BOOL status = ReadFile(
+		hDevice,
+		ipAddresses,
+		sizeof(ipAddresses),
+		&r,
+		NULL);
 
-		status = ReadFile(
-			hDevice,
-			ipAddresses,
-			sizeof(ipAddresses),
-			&r,
-			NULL);
+	if (!status)
+	{
+		CloseHandle(hDevice);
+		printf("Function 'ReadFile' failed - status: %d", GetLastError());
+		return -1;
+	}
 
-		if (!status)
-		{
-			puts("Function 'ReadFile' failed");
-			break;
-		}
+	printf(HEADER);
 
-		puts("IP\n----------------------");
+	PUINT8 ip;
+	PUINT8 mac;
 
-		for (INT i = 0; i < r / sizeof(UINT); ++i)
-		{
-			PUINT8 ip = (PUINT8)&ipAddresses[i];
+	INT count = r / sizeof(OUTPUT_DATA_EXTENSION);
 
-			printf("%hhu.%hhu.%hhu.%hhu\n",
-				ip[0], ip[1], ip[2], ip[3]);
-		}
+	for (INT i = 0; i < count; ++i)
+	{
+		ip = (PUINT8)&ipAddresses[i].ip;
+		mac = (PUINT8)&ipAddresses[i].mac;
 
-		puts("----------------------");
+		printf("|");
+		SetPos(2, i + 3);
+		printf("%u", i);
+		SetPos(5, i + 3);
+		printf("| %hhu.%hhu.%hhu.%hhu ", ip[0], ip[1], ip[2], ip[3]);
+		SetPos(23, i + 3);
+		printf("| %02x:%02x:%02x:%02x:%02x:%02x ", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+		SetPos(43, i + 3);
+		printf("|\n");
+	}
 
-		status = CloseHandle(hDevice);
-		if (!status)
-		{
-			puts("Function 'CloseHandle' failed");
-			break;
-		}
+	printf(FOOTER);
 
-	} while (FALSE);
+	CloseHandle(hDevice);
+	getchar();
 
-	DWORD status = GetLastError();
-	printf("the program completed with status %lu\n", status);
-	system("pause");
-	return status;
+	return 0;
 }

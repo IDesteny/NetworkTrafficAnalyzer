@@ -84,7 +84,7 @@ DbgPrintExWithPrefix(
 	(((x) & 0xff00) >> 8))
 
 #define NORMALIZATION_OF_ADDRESS(addr) \
-	(PUINT8)&(addr);
+	(PUINT8)&(addr)
 
 #define DRIVER_POOL_ID \
 	(PVOID)DriverEntry
@@ -101,6 +101,9 @@ DbgPrintExWithPrefix(
 #define SIZEOF_IP_ADDRESS_LIST_ENTRY \
 	sizeof(IP_ADDRESS_LIST_ENTRY)
 
+#define SIZEOF_OUTPUT_DATA_EXTENSION \
+	sizeof(OUTPUT_DATA_EXTENSION)
+
 #define SIZEOF_BASE_MINIPORT \
 	sizeof(BASE_MINIPORT_NAME)
 
@@ -112,7 +115,7 @@ DbgPrintExWithPrefix(
 
 #define NET_BUFFER_LISTS_FOR_EACH(Entry, ListHead)	\
 	for (									\
-		PNET_BUFFER_LIST (Entry) = ListHead;		\
+		PNET_BUFFER_LIST (Entry) = (ListHead);		\
 		(Entry);								\
 		(Entry) = NET_BUFFER_LIST_NEXT_NBL(Entry))
 
@@ -151,12 +154,14 @@ typedef struct _DESERIALIZATION_INFO
 {
 	UINT ipDst;
 	UINT ipSrc;
+	UINT64 macSrc;
 
 } DESERIALIZATION_INFO, *PDESERIALIZATION_INFO;
 
 typedef struct _IP_ADDRESS_LIST_ENTRY
 {
 	LIST_ENTRY listEntry;
+	UINT64 mac;
 	UINT ip;
 
 } IP_ADDRESS_LIST_ENTRY, *PIP_ADDRESS_LIST_ENTRY;
@@ -181,6 +186,13 @@ typedef struct _FILTER_DEVICE_EXTENSION
 	NDIS_HANDLE hNdisDevice;
 
 } FILTER_DEVICE_EXTENSION, *PFILTER_DEVICE_EXTENSION;
+
+typedef struct _OUTPUT_DATA_EXTENSION
+{
+	UINT64 mac;
+	UINT ip;
+
+} OUTPUT_DATA_EXTENSION, *POUTPUT_DATA_EXTENSION;
 
 
 FILTER_PAUSE FilterPause;
@@ -261,10 +273,8 @@ DriverAccessControlRoutine(
 		PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
 		pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
 
-		
-
 		INT listLen = GetListLength(pIpAddressListHandle);
-		infoLen = listLen * sizeof(UINT);
+		infoLen = listLen * SIZEOF_OUTPUT_DATA_EXTENSION;
 
 		ULONG userBuffLen;
 		userBuffLen = pIoStackLocation->Parameters.DeviceIoControl.OutputBufferLength;
@@ -280,7 +290,7 @@ DriverAccessControlRoutine(
 		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
 		NdisAcquireSpinLock(pSpinLock);
 
-		PUINT outBuffer = pIrp->UserBuffer;
+		POUTPUT_DATA_EXTENSION outBuffer = pIrp->UserBuffer;
 		NdisZeroMemory(outBuffer, infoLen);
 
 		INT iterList = 0;
@@ -296,7 +306,10 @@ DriverAccessControlRoutine(
 				IP_ADDRESS_LIST_ENTRY,
 				listEntry);
 
-			outBuffer[iterList++] = pIp->ip;
+			outBuffer[iterList].ip = pIp->ip;
+			outBuffer[iterList].mac = pIp->mac;
+
+			++iterList;
 		}
 
 		NdisReleaseSpinLock(pSpinLock);
@@ -574,12 +587,13 @@ ElementExists(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	UINT newIp)
 {
-	BOOLEAN result = FALSE;
-
-	NdisAcquireSpinLock(&pIpAddressListHandle->SpinLock);
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+	NdisAcquireSpinLock(pSpinLock);
 
 	PLIST_ENTRY pHeadListEntry;
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
+	BOOLEAN result = FALSE;
 	PIP_ADDRESS_LIST_ENTRY pCurrentIpAddressListEntry;
 
 	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
@@ -596,14 +610,15 @@ ElementExists(
 		}
 	}
 
-	NdisReleaseSpinLock(&pIpAddressListHandle->SpinLock);
+	NdisReleaseSpinLock(pSpinLock);
 	return result;
 }
 
 VOID
 AddIpAddress(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
-	UINT ip)
+	UINT ip,
+	UINT64 mac)
 {
 	do
 	{
@@ -625,9 +640,9 @@ AddIpAddress(
 		}
 
 		pNewIpAddressListEntry->ip = ip;
+		pNewIpAddressListEntry->mac = mac;
 
 		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-
 		NdisAcquireSpinLock(pSpinLock);
 
 		PLIST_ENTRY pHeadListEntry;
@@ -647,17 +662,29 @@ DesserializedInfoHandler(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	PDESERIALIZATION_INFO pDeserealizationInfo)
 {
-	AddIpAddress(pIpAddressListHandle, pDeserealizationInfo->ipDst);
-	AddIpAddress(pIpAddressListHandle, pDeserealizationInfo->ipSrc);
+	AddIpAddress(
+		pIpAddressListHandle,
+		pDeserealizationInfo->ipDst,
+		pDeserealizationInfo->macSrc);
+
+	AddIpAddress(
+		pIpAddressListHandle,
+		pDeserealizationInfo->ipSrc,
+		pDeserealizationInfo->macSrc);
 
 	PUINT8 pIpDst = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipDst);
 	PUINT8 pIpSrc = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipSrc);
 
+	PUINT8 pMacSrc = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->macSrc);
+
 	DEBUGP(DL_INFO,
-		"IP - %hhu.%hhu.%hhu.%hhu > %hhu.%hhu.%hhu.%hhu\n",
+		"IP - %hhu.%hhu.%hhu.%hhu > %hhu.%hhu.%hhu.%hhu, "
+		"MAC - %02x:%02x:%02x:%02x:%02x:%02x\n",
 
 		pIpSrc[0], pIpSrc[1], pIpSrc[2], pIpSrc[3],
-		pIpDst[0], pIpDst[1], pIpDst[2], pIpDst[3]);
+		pIpDst[0], pIpDst[1], pIpDst[2], pIpDst[3],
+		
+		pMacSrc[0], pMacSrc[1], pMacSrc[2], pMacSrc[3], pMacSrc[4], pMacSrc[5]);
 }
 
 VOID
@@ -677,7 +704,8 @@ DeserializationNetBufferLists(
 			headerBuffer = NdisGetDataBuffer(
 				netBuffer,
 				sizeof(ETH_HEADER) + sizeof(IP_HEADER),
-				NULL, 1, 0);
+				NULL,
+				1, 0);
 
 			if (!headerBuffer)
 			{
@@ -694,6 +722,7 @@ DeserializationNetBufferLists(
 
 			deserealizationInfo.ipDst = ipHeader->ip_dst;
 			deserealizationInfo.ipSrc = ipHeader->ip_src;
+			deserealizationInfo.macSrc = *(PUINT64)NdisGetDataBuffer(netBuffer, sizeof(UINT64), NULL, 4, 2);
 
 			DesserializedInfoHandler(pIpAddressListHandle, &deserealizationInfo);
 		}
@@ -788,8 +817,8 @@ FilterDetach(
 	pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
 
 	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-
 	NdisAcquireSpinLock(pSpinLock);
+
 	PLIST_ENTRY pHeadListEntry;
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
