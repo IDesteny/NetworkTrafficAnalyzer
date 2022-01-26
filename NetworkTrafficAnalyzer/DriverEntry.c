@@ -1,7 +1,11 @@
+/*
+* Tasks:
+* 1. Ñheck the performance of the filter without plug functions.
+*/
+
 #define NDIS630
 #include <ndis.h>
 #include <stdarg.h>
-
 
 #define FILTER_UNIQUE_NAME \
 	L"{009f4c24-6c17-43ad-885f-ed6cb50e8d5a}"
@@ -78,6 +82,7 @@ DbgPrintExWithPrefix(
 
 #define ETH_ALEN 6
 #define ETH_TYPE_IP 0x0800
+#define HL_V_SZ 4
 
 #define ntohs(x)			\
 	((((x) & 0x00ff) << 8) | \
@@ -125,6 +130,20 @@ DbgPrintExWithPrefix(
 		(Entry);											\
 		(Entry) = NET_BUFFER_NEXT_NB(Entry))
 
+#define CHECK_MEDIA_TYPE(mediaType)		\
+	(mediaType) != NdisMedium802_3 &&		\
+	(mediaType) != NdisMediumWan &&		\
+	(mediaType) != NdisMediumWirelessWan
+
+#define GET_IP_HEADER(ethHeader) \
+	(PIP_HEADER)((ULONG_PTR)(ethHeader) + sizeof(ETH_HEADER))
+
+#define GET_ETH_HEADER(headerBuffer) \
+	(PETH_HEADER)(headerBuffer)
+
+#define NDIS_NT_SUCCESS(status) \
+	(NDIS_STATUS)NT_SUCCESS((NTSTATUS)(status))
+
 
 typedef struct _ETH_HEADER
 {
@@ -136,8 +155,8 @@ typedef struct _ETH_HEADER
 
 typedef struct _IP_HEADER
 {
-	UCHAR ip_hl : 4;
-	UCHAR ip_v : 4;
+	UCHAR ip_hl : HL_V_SZ;
+	UCHAR ip_v : HL_V_SZ;
 	UCHAR ip_tos;
 	SHORT ip_len;
 	USHORT ip_id;
@@ -214,8 +233,8 @@ GetListLength(
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
 	INT listLen = 0;
-	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
 
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
 	NdisAcquireSpinLock(pSpinLock);
 
 	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
@@ -430,7 +449,7 @@ DriverEntry(
 			SIZEOF_FILTER_DEVICE_EXTENSION,
 			&pFilterDeviceExtension);
 
-		if (status != STATUS_SUCCESS)
+		if (!NT_SUCCESS(status))
 		{
 			DEBUGP(DL_ERROR, "Function 'IoAllocateDriverObjectExtension' failed\n");
 			break;
@@ -442,7 +461,7 @@ DriverEntry(
 			&filterDriverCharacteristics,
 			&pFilterDeviceExtension->hNdisFilterDriver);
 
-		if (status != NDIS_STATUS_SUCCESS)
+		if (!NDIS_NT_SUCCESS(status))
 		{
 			DEBUGP(DL_ERROR, "Function 'NdisFRegisterFilterDriver' failed\n");
 			break;
@@ -450,7 +469,7 @@ DriverEntry(
 
 		status = RegisteringDevice(pFilterDeviceExtension);
 
-		if (status != NDIS_STATUS_SUCCESS)
+		if (!NDIS_NT_SUCCESS(status))
 		{
 			NdisFDeregisterFilterDriver(
 				pFilterDeviceExtension->hNdisFilterDriver);
@@ -479,10 +498,7 @@ FilterAttach(
 	do
 	{
 		NDIS_MEDIUM mediaType = AttachParameters->MiniportMediaType;
-
-		if (mediaType != NdisMedium802_3 &&
-			mediaType != NdisMediumWan &&
-			mediaType != NdisMediumWirelessWan)
+		if (CHECK_MEDIA_TYPE(mediaType))
 		{
 			status = NDIS_STATUS_INVALID_PARAMETER;
 
@@ -712,19 +728,26 @@ DeserializationNetBufferLists(
 				continue;
 			}
 
-			ethHeader = (PETH_HEADER)headerBuffer;
+			ethHeader = GET_ETH_HEADER(headerBuffer);
 			if (ntohs(ethHeader->h_proto) != ETH_TYPE_IP)
 			{
 				continue;
 			}
 
-			ipHeader = (PIP_HEADER)((ULONG_PTR)ethHeader + sizeof(ETH_HEADER));
+			ipHeader = GET_IP_HEADER(ethHeader);
 
 			deserealizationInfo.ipDst = ipHeader->ip_dst;
 			deserealizationInfo.ipSrc = ipHeader->ip_src;
-			deserealizationInfo.macSrc = *(PUINT64)NdisGetDataBuffer(netBuffer, sizeof(UINT64), NULL, 4, 2);
 
-			DesserializedInfoHandler(pIpAddressListHandle, &deserealizationInfo);
+			deserealizationInfo.macSrc = *(PUINT64)NdisGetDataBuffer(
+				netBuffer,
+				sizeof(UINT64),
+				NULL,
+				4, 2);
+
+			DesserializedInfoHandler(
+				pIpAddressListHandle,
+				&deserealizationInfo);
 		}
 	}
 }
