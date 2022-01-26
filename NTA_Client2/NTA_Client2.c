@@ -50,6 +50,7 @@ INT main(VOID)
 	if (hDevice == INVALID_HANDLE_VALUE)
 	{
 		printf("Function 'CreateFile' failed - status: %d", GetLastError());
+		getchar();
 		return -1;
 	}
 
@@ -67,6 +68,7 @@ INT main(VOID)
 	{
 		CloseHandle(hDevice);
 		printf("Function 'ReadFile' failed - status: %d", GetLastError());
+		getchar();
 		return -1;
 	}
 
@@ -83,7 +85,7 @@ INT main(VOID)
 
 		printf("|");
 		SetPos(2, i + 5);
-		printf("%u", i);
+		printf("%u", i + 1);
 		SetPos(5, i + 5);
 		printf("| %hhu.%hhu.%hhu.%hhu ", ip[0], ip[1], ip[2], ip[3]);
 		SetPos(23, i + 5);
@@ -93,7 +95,6 @@ INT main(VOID)
 	}
 
 	printf(FOOTER);
-
 	CloseHandle(hDevice);
 	getchar();
 	return 0;
