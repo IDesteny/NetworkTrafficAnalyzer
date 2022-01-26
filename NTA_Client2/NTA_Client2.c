@@ -2,6 +2,8 @@
 #include <stdio.h>
 
 #define HEADER									\
+	"+------------------------------------------+\n"	\
+	"|         Network Traffic Analyzer         |\n"	\
 	"+----+-----------------+-------------------+\n"	\
 	"| #  |       IP        |        MAC        |\n"	\
 	"+----+-----------------+-------------------+\n"
@@ -16,6 +18,9 @@
 	L"\\\\.\\" DEVICE_NAME
 
 #define BUFF_SIZE 64
+
+#define NORMALIZATION_OF_ADDRESS(addr) \
+	(PUINT8)&(addr)
 
 typedef struct _OUTPUT_DATA_EXTENSION
 {
@@ -32,10 +37,7 @@ SetPos(
 	return SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), (COORD){ x, y });
 }
 
-
-INT
-main(
-	VOID)
+INT main(VOID)
 {
 	HANDLE hDevice = CreateFile(
 		DEVICE_PATH,
@@ -47,7 +49,7 @@ main(
 
 	if (hDevice == INVALID_HANDLE_VALUE)
 	{
-		puts("Function 'CreateFile' failed - status: %d", GetLastError());
+		printf("Function 'CreateFile' failed - status: %d", GetLastError());
 		return -1;
 	}
 
@@ -72,22 +74,21 @@ main(
 
 	PUINT8 ip;
 	PUINT8 mac;
-
 	INT count = r / sizeof(OUTPUT_DATA_EXTENSION);
 
 	for (INT i = 0; i < count; ++i)
 	{
-		ip = (PUINT8)&ipAddresses[i].ip;
-		mac = (PUINT8)&ipAddresses[i].mac;
+		ip = NORMALIZATION_OF_ADDRESS(ipAddresses[i].ip);
+		mac = NORMALIZATION_OF_ADDRESS(ipAddresses[i].mac);
 
 		printf("|");
-		SetPos(2, i + 3);
+		SetPos(2, i + 5);
 		printf("%u", i);
-		SetPos(5, i + 3);
+		SetPos(5, i + 5);
 		printf("| %hhu.%hhu.%hhu.%hhu ", ip[0], ip[1], ip[2], ip[3]);
-		SetPos(23, i + 3);
+		SetPos(23, i + 5);
 		printf("| %02x:%02x:%02x:%02x:%02x:%02x ", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-		SetPos(43, i + 3);
+		SetPos(43, i + 5);
 		printf("|\n");
 	}
 
@@ -95,6 +96,5 @@ main(
 
 	CloseHandle(hDevice);
 	getchar();
-
 	return 0;
 }

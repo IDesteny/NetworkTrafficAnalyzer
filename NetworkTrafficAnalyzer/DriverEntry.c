@@ -210,13 +210,14 @@ INT
 GetListLength(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle)
 {
-	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-	NdisAcquireSpinLock(pSpinLock);
-
 	PLIST_ENTRY pHeadListEntry;
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
 	INT listLen = 0;
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+
+	NdisAcquireSpinLock(pSpinLock);
+
 	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
 	{
 		++listLen;
@@ -287,9 +288,6 @@ DriverAccessControlRoutine(
 			break;
 		}
 
-		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-		NdisAcquireSpinLock(pSpinLock);
-
 		POUTPUT_DATA_EXTENSION outBuffer = pIrp->UserBuffer;
 		NdisZeroMemory(outBuffer, infoLen);
 
@@ -298,6 +296,9 @@ DriverAccessControlRoutine(
 
 		PLIST_ENTRY pHeadListEntry;
 		pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
+		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+		NdisAcquireSpinLock(pSpinLock);
 
 		LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
 		{
@@ -513,12 +514,11 @@ FilterAttach(
 		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
 		NdisAllocateSpinLock(pSpinLock);
 
-		NdisAcquireSpinLock(pSpinLock);
-
 		PLIST_ENTRY pListEntry;
 		pListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
-		InitializeListHead(pListEntry);
 
+		NdisAcquireSpinLock(pSpinLock);
+		InitializeListHead(pListEntry);
 		NdisReleaseSpinLock(pSpinLock);
 
 		SIZE_T result = RtlCompareMemory(
@@ -587,14 +587,14 @@ ElementExists(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	UINT newIp)
 {
-	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-	NdisAcquireSpinLock(pSpinLock);
-
 	PLIST_ENTRY pHeadListEntry;
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
 	BOOLEAN result = FALSE;
 	PIP_ADDRESS_LIST_ENTRY pCurrentIpAddressListEntry;
+
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+	NdisAcquireSpinLock(pSpinLock);
 
 	LIST_ENTRY_FOR_EACH(entry, pHeadListEntry)
 	{
@@ -642,11 +642,11 @@ AddIpAddress(
 		pNewIpAddressListEntry->ip = ip;
 		pNewIpAddressListEntry->mac = mac;
 
-		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-		NdisAcquireSpinLock(pSpinLock);
-
 		PLIST_ENTRY pHeadListEntry;
 		pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
+
+		PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+		NdisAcquireSpinLock(pSpinLock);
 
 		InsertHeadList(
 			pHeadListEntry,
@@ -816,14 +816,14 @@ FilterDetach(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
 	pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
 
-	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
-	NdisAcquireSpinLock(pSpinLock);
-
 	PLIST_ENTRY pHeadListEntry;
 	pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
 	PIP_ADDRESS_LIST_ENTRY pIpAddressListEntry;
 	PLIST_ENTRY delEntry;
+
+	PNDIS_SPIN_LOCK pSpinLock = &pIpAddressListHandle->SpinLock;
+	NdisAcquireSpinLock(pSpinLock);
 
 	while (pHeadListEntry->Flink != pHeadListEntry)
 	{
