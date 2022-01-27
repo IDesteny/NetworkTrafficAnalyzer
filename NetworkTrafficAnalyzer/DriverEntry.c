@@ -1,32 +1,39 @@
+/*
+* Tasks:
+* 1. Check the performance of the filter without plug functions.
+* 2. Try to remove the allocation in the connection.
+* 3. Try desserialization on PASSIVE_LEVEL.
+*/
+
 #define NDIS630
 #include <ndis.h>
 #include <stdarg.h>
 
-#define FILTER_UNIQUE_NAME					\
+#define FILTER_UNIQUE_NAME \
 	L"{009f4c24-6c17-43ad-885f-ed6cb50e8d5a}"
 
-#define FILTER_SERVICE_NAME					\
+#define FILTER_SERVICE_NAME \
 	L"NetworkTrafficAnalyzer"
 
-#define BASE_MINIPORT_NAME					\
+#define BASE_MINIPORT_NAME \
 	L"Intel(R) 82574L Gigabit Network Connection"
 
-#define FILTER_FRIENDLY_NAME					\
+#define FILTER_FRIENDLY_NAME \
 	FILTER_SERVICE_NAME L" NDIS Filter"
 
-#define LINKNAME_STRING						\
+#define LINKNAME_STRING \
 	L"\\DosDevices\\" FILTER_SERVICE_NAME
 
-#define NTDEVICE_STRING						\
+#define NTDEVICE_STRING \
 	L"\\Device\\" FILTER_SERVICE_NAME
 
-#define FILTER_TAG							\
+#define FILTER_TAG \
 	'NTA'
 
-#define FILTER_MAJOR_NDIS_VERSION		6
-#define FILTER_MINOR_NDIS_VERSION		30
+#define FILTER_MAJOR_NDIS_VERSION 6
+#define FILTER_MINOR_NDIS_VERSION 30
 
-#define FILTER_MAJOR_DRIVER_VERSION	1
+#define FILTER_MAJOR_DRIVER_VERSION 1
 
 #ifdef DBG
 
@@ -75,33 +82,36 @@ DbgPrintExWithPrefix(
 
 #endif // DBG
 
-#define ETH_ALEN	6
+#define ETH_ALEN 6
 #define ETH_TYPE_IP 0x0800
-#define HL_V_SZ	4
+#define HL_V_SZ 4
 
 #define ntohs(x)			\
 	((((x) & 0x00ff) << 8) | \
 	(((x) & 0xff00) >> 8))
 
-#define NORMALIZATION_OF_ADDRESS(addr)	\
+#define NORMALIZATION_OF_ADDRESS(addr) \
 	(PUINT8)&(addr)
 
-#define DRIVER_POOL_ID				\
+#define DRIVER_POOL_ID \
 	(PVOID)DriverEntry
 
-#define SIZEOF_FILTER_DEVICE_EXTENSION	\
+#define SIZEOF_FILTER_DEVICE_EXTENSION \
 	sizeof(FILTER_DEVICE_EXTENSION)
 
-#define SIZEOF_FILTER_EXTENSION		\
+#define SIZEOF_FILTER_EXTENSION \
 	sizeof(FILTER_EXTENSION)
 
-#define SIZEOF_IP_ADDRESS_LIST_ENTRY	\
+#define SIZEOF_PFILTER_EXTENSION \
+	sizeof(PFILTER_EXTENSION)
+
+#define SIZEOF_IP_ADDRESS_LIST_ENTRY \
 	sizeof(IP_ADDRESS_LIST_ENTRY)
 
-#define SIZEOF_OUTPUT_DATA_EXTENSION	\
+#define SIZEOF_OUTPUT_DATA_EXTENSION \
 	sizeof(OUTPUT_DATA_EXTENSION)
 
-#define SIZEOF_BASE_MINIPORT			\
+#define SIZEOF_BASE_MINIPORT \
 	sizeof(BASE_MINIPORT_NAME)
 
 #define LIST_ENTRY_FOR_EACH(Entry, ListHead)			\
@@ -127,13 +137,13 @@ DbgPrintExWithPrefix(
 	(mediaType) != NdisMediumWan &&		\
 	(mediaType) != NdisMediumWirelessWan
 
-#define GET_IP_HEADER(ethHeader)							\
+#define GET_IP_HEADER(ethHeader) \
 	(PIP_HEADER)((ULONG_PTR)(ethHeader) + sizeof(ETH_HEADER))
 
-#define GET_ETH_HEADER(headerBuffer)						\
+#define GET_ETH_HEADER(headerBuffer) \
 	(PETH_HEADER)(headerBuffer)
 
-#define NDIS_NT_SUCCESS(status)							\
+#define NDIS_NT_SUCCESS(status) \
 	(NDIS_STATUS)NT_SUCCESS((NTSTATUS)(status))
 
 
@@ -206,9 +216,12 @@ typedef struct _OUTPUT_DATA_EXTENSION
 } OUTPUT_DATA_EXTENSION, *POUTPUT_DATA_EXTENSION;
 
 
+FILTER_PAUSE FilterPause;
+FILTER_STATUS FilterStatus;
 FILTER_ATTACH FilterAttach;
 FILTER_DETACH FilterDetach;
 DRIVER_UNLOAD DriverUnload;
+FILTER_RESTART FilterRestart;
 DRIVER_INITIALIZE DriverEntry;
 FILTER_RETURN_NET_BUFFER_LISTS FilterReturnNetBufferLists;
 FILTER_SEND_NET_BUFFER_LISTS_COMPLETE FilterSendNetBufferListsComplete;
@@ -267,15 +280,17 @@ DriverAccessControlRoutine(
 			break;
 		}
 
-		PFILTER_EXTENSION pFilterExtension;
-		pFilterExtension = NdisGetDeviceReservedExtension(pDeviceObject);
-		if (!pFilterExtension)
+		PFILTER_EXTENSION *pReservedExtension;
+		pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
+		if (!pReservedExtension)
 		{
 			status = STATUS_DEVICE_NOT_READY;
 
 			DEBUGP(DL_WARN, "Driver not attached\n");
 			break;
 		}
+
+		PFILTER_EXTENSION pFilterExtension = *pReservedExtension;
 
 		PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
 		pIpAddressListHandle = &pFilterExtension->ipAddressListHandle;
@@ -361,7 +376,7 @@ RegisteringDevice(
 	deviceObjectAttributes.MajorFunctions = pDriverDispatch;
 	deviceObjectAttributes.DeviceName = &deviceName;
 	deviceObjectAttributes.SymbolicName = &deviceLinkUnicodeString;
-	deviceObjectAttributes.ExtensionSize = SIZEOF_FILTER_EXTENSION;
+	deviceObjectAttributes.ExtensionSize = SIZEOF_PFILTER_EXTENSION;
 
 	do
 	{
@@ -378,7 +393,7 @@ RegisteringDevice(
 		}
 
 		PVOID pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
-		NdisZeroMemory(pReservedExtension, SIZEOF_FILTER_EXTENSION);
+		NdisZeroMemory(pReservedExtension, SIZEOF_PFILTER_EXTENSION);
 
 	} while (FALSE);
 
@@ -420,8 +435,11 @@ DriverEntry(
 
 	filterDriverCharacteristics.SendNetBufferListsCompleteHandler = FilterSendNetBufferListsComplete;
 	filterDriverCharacteristics.ReturnNetBufferListsHandler = FilterReturnNetBufferLists;
+	filterDriverCharacteristics.RestartHandler = FilterRestart;
 	filterDriverCharacteristics.AttachHandler = FilterAttach;
 	filterDriverCharacteristics.DetachHandler = FilterDetach;
+	filterDriverCharacteristics.StatusHandler = FilterStatus;
+	filterDriverCharacteristics.PauseHandler = FilterPause;
 
 	pDriverObject->DriverUnload = DriverUnload;
 
@@ -477,7 +495,7 @@ FilterAttach(
 	DEBUGP(DL_TRACE, "==> FilterAttach\n");
 
 	UNREFERENCED_PARAMETER(FilterDriverContext);
-	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+	NDIS_STATUS status;
 
 	do
 	{
@@ -490,22 +508,22 @@ FilterAttach(
 			break;
 		}
 
-		SIZE_T result = RtlCompareMemory(
-			AttachParameters->BaseMiniportInstanceName->Buffer,
-			BASE_MINIPORT_NAME,
-			SIZEOF_BASE_MINIPORT);
+		PFILTER_EXTENSION pFilterExtension;
+		pFilterExtension = NdisAllocateMemoryWithTagPriority(
+			NdisFilterHandle,
+			SIZEOF_FILTER_EXTENSION,
+			FILTER_TAG,
+			LowPoolPriority);
 
-		if (result != SIZEOF_BASE_MINIPORT)
+		if (!pFilterExtension)
 		{
+			status = STATUS_BUFFER_ALL_ZEROS;
+
+			DEBUGP(DL_ERROR, "Function 'NdisAllocateMemoryWithTagPriority' failed\n");
 			break;
 		}
 
-		PDRIVER_OBJECT pDriverObject = FilterDriverContext;
-
-		PFILTER_EXTENSION pFilterExtension;
-		pFilterExtension = NdisGetDeviceReservedExtension(
-			pDriverObject->DeviceObject);
-
+		NdisZeroMemory(pFilterExtension, SIZEOF_FILTER_EXTENSION);
 		pFilterExtension->hNdisFilterDevice = NdisFilterHandle;
 
 		PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle;
@@ -520,6 +538,22 @@ FilterAttach(
 		NdisAcquireSpinLock(pSpinLock);
 		InitializeListHead(pListEntry);
 		NdisReleaseSpinLock(pSpinLock);
+
+		SIZE_T result = RtlCompareMemory(
+			AttachParameters->BaseMiniportInstanceName->Buffer,
+			BASE_MINIPORT_NAME,
+			SIZEOF_BASE_MINIPORT);
+
+		if (result == SIZEOF_BASE_MINIPORT)
+		{
+			PDRIVER_OBJECT pDriverObject = FilterDriverContext;
+
+			PFILTER_EXTENSION *pReservedExtension;
+			pReservedExtension = NdisGetDeviceReservedExtension(
+				pDriverObject->DeviceObject);
+
+			*pReservedExtension = pFilterExtension;
+		}
 
 		NDIS_FILTER_ATTRIBUTES filterAttributes;
 		NdisZeroMemory(&filterAttributes, NDIS_SIZEOF_FILTER_ATTRIBUTES_REVISION_1);
@@ -547,6 +581,22 @@ FilterAttach(
 	} while (FALSE);
 
 	DEBUGP(DL_TRACE, "<== FilterAttach - status: %i\n", status);
+	return status;
+}
+
+NDIS_STATUS
+FilterRestart(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_FILTER_RESTART_PARAMETERS RestartParameters)
+{
+	DEBUGP(DL_TRACE, "==> FilterRestart\n");
+
+	UNREFERENCED_PARAMETER(FilterModuleContext);
+	UNREFERENCED_PARAMETER(RestartParameters);
+
+	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+
+	DEBUGP(DL_TRACE, "<== FilterRestart - status %i\n", status);
 	return status;
 }
 
@@ -651,11 +701,10 @@ DesserializedInfoHandler(
 
 		pIpSrc[0], pIpSrc[1], pIpSrc[2], pIpSrc[3],
 		pIpDst[0], pIpDst[1], pIpDst[2], pIpDst[3],
-
+		
 		pMacSrc[0], pMacSrc[1], pMacSrc[2], pMacSrc[3], pMacSrc[4], pMacSrc[5]);
 }
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
 VOID
 DeserializationNetBufferLists(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
@@ -750,6 +799,38 @@ FilterSendNetBufferListsComplete(
 }
 
 VOID
+FilterStatus(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_STATUS_INDICATION StatusIndication)
+{
+	DEBUGP(DL_TRACE, "==> FilterStatus\n");
+
+	PFILTER_EXTENSION pFilterExtension = FilterModuleContext;
+
+	NdisFIndicateStatus(
+		pFilterExtension->hNdisFilterDevice,
+		StatusIndication);
+
+	DEBUGP(DL_TRACE, "<== FilterStatus\n");
+}
+
+NDIS_STATUS
+FilterPause(
+	NDIS_HANDLE FilterModuleContext,
+	PNDIS_FILTER_PAUSE_PARAMETERS PauseParameters)
+{
+	DEBUGP(DL_TRACE, "==> FilterPause\n");
+
+	UNREFERENCED_PARAMETER(FilterModuleContext);
+	UNREFERENCED_PARAMETER(PauseParameters);
+
+	NDIS_STATUS status = NDIS_STATUS_SUCCESS;
+
+	DEBUGP(DL_TRACE, "<== FilterPause - status %i\n", status);
+	return status;
+}
+
+VOID
 FilterDetach(
 	NDIS_HANDLE FilterModuleContext)
 {
@@ -783,6 +864,11 @@ FilterDetach(
 
 	NdisReleaseSpinLock(pSpinLock);
 	NdisFreeSpinLock(pSpinLock);
+
+	NdisFreeMemoryWithTagPriority(
+		pFilterExtension->hNdisFilterDevice,
+		FilterModuleContext,
+		FILTER_TAG);
 
 	DEBUGP(DL_TRACE, "<== FilterDetach\n");
 }
