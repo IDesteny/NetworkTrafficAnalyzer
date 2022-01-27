@@ -1,8 +1,6 @@
 /*
 * Tasks:
-* 1. Check the performance of the filter without plug functions.
-* 2. Try to remove the allocation in the connection.
-* 3. Try desserialization on PASSIVE_LEVEL.
+* 1. Ñheck the performance of the filter without plug functions.
 */
 
 #define NDIS630
