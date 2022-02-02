@@ -1,37 +1,32 @@
-/*
-* Tasks:
-* 1. Ñheck the performance of the filter without plug functions.
-*/
-
 #define NDIS630
 #include <ndis.h>
 #include <stdarg.h>
 
-#define FILTER_UNIQUE_NAME \
+#define FILTER_UNIQUE_NAME						\
 	L"{009f4c24-6c17-43ad-885f-ed6cb50e8d5a}"
 
-#define FILTER_SERVICE_NAME \
+#define FILTER_SERVICE_NAME						\
 	L"NetworkTrafficAnalyzer"
 
-#define BASE_MINIPORT_NAME \
+#define BASE_MINIPORT_NAME						\
 	L"Intel(R) 82574L Gigabit Network Connection"
 
-#define FILTER_FRIENDLY_NAME \
+#define FILTER_FRIENDLY_NAME						\
 	FILTER_SERVICE_NAME L" NDIS Filter"
 
-#define LINKNAME_STRING \
+#define LINKNAME_STRING							\
 	L"\\DosDevices\\" FILTER_SERVICE_NAME
 
-#define NTDEVICE_STRING \
+#define NTDEVICE_STRING							\
 	L"\\Device\\" FILTER_SERVICE_NAME
 
-#define FILTER_TAG \
+#define FILTER_TAG								\
 	'NTA'
 
-#define FILTER_MAJOR_NDIS_VERSION 6
-#define FILTER_MINOR_NDIS_VERSION 30
+#define FILTER_MAJOR_NDIS_VERSION		6
+#define FILTER_MINOR_NDIS_VERSION		30
 
-#define FILTER_MAJOR_DRIVER_VERSION 1
+#define FILTER_MAJOR_DRIVER_VERSION	1
 
 #ifdef DBG
 
@@ -40,7 +35,7 @@
 #define DL_WARN	1
 #define DL_ERROR	0
 
-INT debugLvl = DL_WARN;
+INT debugLvl = DL_INFO;
 
 VOID
 DbgPrintExWithPrefix(
@@ -67,7 +62,8 @@ DbgPrintExWithPrefix(
 {								\
 	if ((lvl) <= debugLvl)			\
 	{							\
-		DbgPrintExWithPrefix("NTA: ",	\
+		DbgPrintExWithPrefix(		\
+			"NTA: ",				\
 			DPFLTR_IHVNETWORK_ID,	\
 			lvl,					\
 			__VA_ARGS__);			\
@@ -80,36 +76,35 @@ DbgPrintExWithPrefix(
 
 #endif // DBG
 
-#define ETH_ALEN 6
-#define ETH_TYPE_IP 0x0800
-#define HL_V_SZ 4
+#define ETH_ALEN	6
+#define ETH_TYPE_IP	0x0800
 
-#define ntohs(x)			\
-	((((x) & 0x00ff) << 8) | \
-	(((x) & 0xff00) >> 8))
+#define ntohs(x)					\
+	((((x) & 0x00ff) << 8) |			\
+	 (((x) & 0xff00) >> 8))
 
-#define NORMALIZATION_OF_ADDRESS(addr) \
+#define NORMALIZATION_OF_ADDRESS(addr)	\
 	(PUINT8)&(addr)
 
-#define DRIVER_POOL_ID \
+#define DRIVER_POOL_ID				\
 	(PVOID)DriverEntry
 
-#define SIZEOF_FILTER_DEVICE_EXTENSION \
+#define SIZEOF_FILTER_DEVICE_EXTENSION	\
 	sizeof(FILTER_DEVICE_EXTENSION)
 
-#define SIZEOF_FILTER_EXTENSION \
+#define SIZEOF_FILTER_EXTENSION		\
 	sizeof(FILTER_EXTENSION)
 
-#define SIZEOF_PFILTER_EXTENSION \
+#define SIZEOF_PFILTER_EXTENSION		\
 	sizeof(PFILTER_EXTENSION)
 
-#define SIZEOF_IP_ADDRESS_LIST_ENTRY \
+#define SIZEOF_IP_ADDRESS_LIST_ENTRY	\
 	sizeof(IP_ADDRESS_LIST_ENTRY)
 
-#define SIZEOF_OUTPUT_DATA_EXTENSION \
+#define SIZEOF_OUTPUT_DATA_EXTENSION	\
 	sizeof(OUTPUT_DATA_EXTENSION)
 
-#define SIZEOF_BASE_MINIPORT \
+#define SIZEOF_BASE_MINIPORT			\
 	sizeof(BASE_MINIPORT_NAME)
 
 #define LIST_ENTRY_FOR_EACH(Entry, ListHead)			\
@@ -132,55 +127,55 @@ DbgPrintExWithPrefix(
 
 #define CHECK_MEDIA_TYPE(mediaType)		\
 	(mediaType) != NdisMedium802_3 &&		\
-	(mediaType) != NdisMediumWan &&		\
+	(mediaType) != NdisMediumWan	 &&		\
 	(mediaType) != NdisMediumWirelessWan
 
-#define GET_IP_HEADER(ethHeader) \
-	(PIP_HEADER)((ULONG_PTR)(ethHeader) + sizeof(ETH_HEADER))
-
-#define GET_ETH_HEADER(headerBuffer) \
+#define GET_ETH_HEADER(headerBuffer)						\
 	(PETH_HEADER)(headerBuffer)
 
-#define NDIS_NT_SUCCESS(status) \
+#define GET_IP_HEADER(ethHeader)							\
+	(PIP_HEADER)((ULONG_PTR)(ethHeader) + sizeof(ETH_HEADER))
+
+#define NDIS_SUCCESS(status)								\
 	(NDIS_STATUS)NT_SUCCESS((NTSTATUS)(status))
 
 
 typedef struct _ETH_HEADER
 {
-	UCHAR h_dest[ETH_ALEN];
-	UCHAR h_source[ETH_ALEN];
-	USHORT h_proto;
+	UINT8	dstMac[ETH_ALEN];
+	UINT8	srcMac[ETH_ALEN];
+	UINT16	ethType;
 
 } ETH_HEADER, *PETH_HEADER;
 
 typedef struct _IP_HEADER
 {
-	UCHAR ip_hl : HL_V_SZ;
-	UCHAR ip_v : HL_V_SZ;
-	UCHAR ip_tos;
-	SHORT ip_len;
-	USHORT ip_id;
-	SHORT ip_off;
-	UCHAR ip_ttl;
-	UCHAR ip_p;
-	USHORT ip_sum;
-	UINT ip_src;
-	UINT ip_dst;
-
+	UINT8	ip_hl : 4;
+	UINT8	ip_v : 4;
+	UINT8	ip_tos;
+	INT16	ip_len;
+	UINT16	ip_id;
+	INT16	ip_off;
+	UINT8	ip_ttl;
+	UINT8	ip_p;
+	UINT16	ip_sum;
+	UINT32	ip_src;
+	UINT32	ip_dst;
+	
 } IP_HEADER, *PIP_HEADER;
 
 typedef struct _DESERIALIZATION_INFO
 {
-	UINT ipDst;
-	UINT ipSrc;
-	UINT64 macSrc;
+	UINT	ipDst;
+	UINT	ipSrc;
+	UINT8 mac[ETH_ALEN];
 
 } DESERIALIZATION_INFO, *PDESERIALIZATION_INFO;
 
 typedef struct _IP_ADDRESS_LIST_ENTRY
 {
 	LIST_ENTRY listEntry;
-	UINT64 mac;
+	UINT8 mac[ETH_ALEN];
 	UINT ip;
 
 } IP_ADDRESS_LIST_ENTRY, *PIP_ADDRESS_LIST_ENTRY;
@@ -208,7 +203,7 @@ typedef struct _FILTER_DEVICE_EXTENSION
 
 typedef struct _OUTPUT_DATA_EXTENSION
 {
-	UINT64 mac;
+	UINT8 mac[ETH_ALEN];
 	UINT ip;
 
 } OUTPUT_DATA_EXTENSION, *POUTPUT_DATA_EXTENSION;
@@ -250,7 +245,7 @@ VOID
 IoCompleteIrp(
 	PIRP pIrp,
 	NTSTATUS status,
-	ULONG infoLen)
+	ULONG_PTR infoLen)
 {
 	pIrp->IoStatus.Status = status;
 	pIrp->IoStatus.Information = infoLen;
@@ -267,7 +262,7 @@ DriverAccessControlRoutine(
 	UNREFERENCED_PARAMETER(pDeviceObject);
 
 	NTSTATUS status = STATUS_SUCCESS;
-	ULONG infoLen = 0;
+	ULONG_PTR infoLen = 0;
 
 	do
 	{
@@ -327,7 +322,11 @@ DriverAccessControlRoutine(
 				listEntry);
 
 			outBuffer[iterList].ip = pIp->ip;
-			outBuffer[iterList].mac = pIp->mac;
+
+			RtlCopyMemory(
+				outBuffer[iterList].mac,
+				pIp->mac,
+				ETH_ALEN);
 
 			++iterList;
 		}
@@ -390,7 +389,8 @@ RegisteringDevice(
 			break;
 		}
 
-		PVOID pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
+		PVOID pReservedExtension;
+		pReservedExtension = NdisGetDeviceReservedExtension(pDeviceObject);
 		NdisZeroMemory(pReservedExtension, SIZEOF_PFILTER_EXTENSION);
 
 	} while (FALSE);
@@ -461,7 +461,7 @@ DriverEntry(
 			&filterDriverCharacteristics,
 			&pFilterDeviceExtension->hNdisFilterDriver);
 
-		if (!NDIS_NT_SUCCESS(status))
+		if (!NDIS_SUCCESS(status))
 		{
 			DEBUGP(DL_ERROR, "Function 'NdisFRegisterFilterDriver' failed\n");
 			break;
@@ -469,7 +469,7 @@ DriverEntry(
 
 		status = RegisteringDevice(pFilterDeviceExtension);
 
-		if (!NDIS_NT_SUCCESS(status))
+		if (!NDIS_SUCCESS(status))
 		{
 			NdisFDeregisterFilterDriver(
 				pFilterDeviceExtension->hNdisFilterDriver);
@@ -534,7 +534,9 @@ FilterAttach(
 		pListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
 
 		NdisAcquireSpinLock(pSpinLock);
+
 		InitializeListHead(pListEntry);
+
 		NdisReleaseSpinLock(pSpinLock);
 
 		SIZE_T result = RtlCompareMemory(
@@ -565,7 +567,7 @@ FilterAttach(
 			pFilterExtension,
 			&filterAttributes);
 
-		if (status != NDIS_STATUS_SUCCESS)
+		if (!NDIS_SUCCESS(status))
 		{
 			NdisFreeMemoryWithTagPriority(
 				NdisFilterHandle,
@@ -634,7 +636,7 @@ VOID
 AddIpAddress(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	UINT ip,
-	UINT64 mac)
+	PUINT8 mac)
 {
 	do
 	{
@@ -656,7 +658,10 @@ AddIpAddress(
 		}
 
 		pNewIpAddressListEntry->ip = ip;
-		pNewIpAddressListEntry->mac = mac;
+		RtlCopyMemory(
+			pNewIpAddressListEntry->mac,
+			mac,
+			ETH_ALEN);
 
 		PLIST_ENTRY pHeadListEntry;
 		pHeadListEntry = &pIpAddressListHandle->ipAddressListEntry.listEntry;
@@ -678,20 +683,23 @@ DesserializedInfoHandler(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	PDESERIALIZATION_INFO pDeserealizationInfo)
 {
-	AddIpAddress(
-		pIpAddressListHandle,
+	UINT ip[] = {
 		pDeserealizationInfo->ipDst,
-		pDeserealizationInfo->macSrc);
+		pDeserealizationInfo->ipSrc
+	};
 
-	AddIpAddress(
-		pIpAddressListHandle,
-		pDeserealizationInfo->ipSrc,
-		pDeserealizationInfo->macSrc);
+	for (INT i = 0; i < ARRAYSIZE(ip); ++i)
+	{
+		AddIpAddress(
+			pIpAddressListHandle,
+			ip[i],
+			pDeserealizationInfo->mac);
+	}
 
 	PUINT8 pIpDst = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipDst);
 	PUINT8 pIpSrc = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->ipSrc);
 
-	PUINT8 pMacSrc = NORMALIZATION_OF_ADDRESS(pDeserealizationInfo->macSrc);
+	PUINT8 pMacSrc = pDeserealizationInfo->mac;
 
 	DEBUGP(DL_INFO,
 		"IP - %hhu.%hhu.%hhu.%hhu > %hhu.%hhu.%hhu.%hhu, "
@@ -699,7 +707,7 @@ DesserializedInfoHandler(
 
 		pIpSrc[0], pIpSrc[1], pIpSrc[2], pIpSrc[3],
 		pIpDst[0], pIpDst[1], pIpDst[2], pIpDst[3],
-		
+
 		pMacSrc[0], pMacSrc[1], pMacSrc[2], pMacSrc[3], pMacSrc[4], pMacSrc[5]);
 }
 
@@ -708,7 +716,7 @@ DeserializationNetBufferLists(
 	PIP_ADDRESS_LIST_HANDLE pIpAddressListHandle,
 	PNET_BUFFER_LIST netBufferLists)
 {
-	PUCHAR headerBuffer;
+	PUINT8 headerBuffer;
 	PIP_HEADER ipHeader;
 	PETH_HEADER ethHeader;
 	DESERIALIZATION_INFO deserealizationInfo;
@@ -729,21 +737,21 @@ DeserializationNetBufferLists(
 			}
 
 			ethHeader = GET_ETH_HEADER(headerBuffer);
-			if (ntohs(ethHeader->h_proto) != ETH_TYPE_IP)
+
+			if (ntohs(ethHeader->ethType) != ETH_TYPE_IP)
 			{
 				continue;
 			}
+
+			RtlCopyMemory(
+				deserealizationInfo.mac,
+				ethHeader->srcMac,
+				ETH_ALEN);
 
 			ipHeader = GET_IP_HEADER(ethHeader);
 
 			deserealizationInfo.ipDst = ipHeader->ip_dst;
 			deserealizationInfo.ipSrc = ipHeader->ip_src;
-
-			deserealizationInfo.macSrc = *(PUINT64)NdisGetDataBuffer(
-				netBuffer,
-				sizeof(UINT64),
-				NULL,
-				4, 2);
 
 			DesserializedInfoHandler(
 				pIpAddressListHandle,
